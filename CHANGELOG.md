@@ -91,7 +91,7 @@
   与供应商编辑页（按类型条件展示表单、删除确认）。
 - 项目初始化：README、MIT LICENSE、Changelog、git 仓库。
 
-[Unreleased]: https://github.com/zicowarn/CodingPlanQuota/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/zicowarn/CodingPlanQuota/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/zicowarn/CodingPlanQuota/compare/v0.1.0...v0.3.0
-[0.1.0]: https://github.com/zicowarn/CodingPlanQuota/releases/tag/v0.1.0
+[Unreleased]: https://github.com/MeIotCOM/CodingPlanQuota/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MeIotCOM/CodingPlanQuota/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/MeIotCOM/CodingPlanQuota/compare/v0.1.0...v0.3.0
+[0.1.0]: https://github.com/MeIotCOM/CodingPlanQuota/releases/tag/v0.1.0
