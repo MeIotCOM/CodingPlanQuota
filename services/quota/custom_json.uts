@@ -1,0 +1,166 @@
+// 自定义 JSON 映射协议 —— 对应 cc-switch「自定义额度查询」的移动端等价物。
+//
+// 不引入 JS 脚本引擎（移动端安全 + UTS 无 eval），改为声明式配置：
+// 用户填写端点 URL + 鉴权方式 + 每个窗口的 JSON 取值路径，语义：
+//   - percentPath 有值 → 直接作为已用百分比（可配 0-1 小数自动 ×100）；
+//   - 否则 limitPath + remainingPath → used = limit - remaining，
+//     utilization = used / limit * 100（与 Kimi 协议同构）；
+//   - resetPath 走 extractResetTime（字符串/秒/毫秒时间戳通吃）。
+// 路径取不到的窗口跳过；一个窗口都没有解析出来 → 明确报错。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, extractResetTime, makeTier, makeOk, makeFail, makeTransientFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+/** 一个窗口的取值路径声明 */
+export type CustomWindowDef = {
+	name : string          // five_hour | weekly_limit | monthly
+	percentPath : string
+	limitPath : string
+	remainingPath : string
+	resetPath : string
+}
+
+/** 一份自定义查询配置（序列化后存 StoredProvider.customQuery） */
+export type CustomQueryDef = {
+	authStyle : string        // bearer | raw | none
+	fractionPercent : boolean // percent 是 0-1 小数，需 ×100
+	windows : CustomWindowDef[]
+}
+
+/**
+ * dot 路径取值：data.limits.0.detail → 逐段下钻（对象键或数组下标）。
+ * 任一段取不到返回 null。
+ */
+export function getPathValue(obj : UTSJSONObject, path : string) : any | null {
+	if (path.length == 0) return null
+	const segs = path.split(".")
+	let cur : any | null = obj
+	for (let seg of segs) {
+		if (cur == null) return null
+		if (cur instanceof UTSJSONObject) {
+			const o = cur as UTSJSONObject
+			// 先按数组取：getArray 仅在该键确实是数组时返回非 null
+			const asArr = o.getArray(seg)
+			if (asArr != null) {
+				cur = asArr
+				continue
+			}
+			cur = o[seg]
+		} else {
+			// 当前是数组（Array<any>）→ 按下标取
+			const idx = parseInt(seg)
+			if (isNaN(idx)) return null
+			const arr = cur as Array<any>
+			if (idx < 0 || idx >= arr.length) return null
+			cur = arr[idx]
+		}
+	}
+	return cur
+}
+
+/** 从 StoredProvider.customQuery 的 JSON 反序列化配置；空串/非法返回 null */
+export function parseCustomQueryDef(json : string) : CustomQueryDef | null {
+	if (json.trim().length == 0) return null
+	const obj = JSON.parse<UTSJSONObject>(json)
+	if (obj == null) return null
+
+	let authStyle : string = "bearer"
+	const as = obj.getString("authStyle")
+	if (as != null && as.length > 0) authStyle = as
+
+	let fraction = false
+	const frac = obj.getBoolean("fractionPercent")
+	if (frac != null) fraction = frac
+
+	const windows : CustomWindowDef[] = []
+	const arr = obj.getArray("windows")
+	if (arr != null) {
+		for (let itemAny of arr) {
+			const item = itemAny as UTSJSONObject
+			const w : CustomWindowDef = {
+				name : item.getString("name") != null ? (item.getString("name") as string) : "five_hour",
+				percentPath : readPath(item, "percentPath"),
+				limitPath : readPath(item, "limitPath"),
+				remainingPath : readPath(item, "remainingPath"),
+				resetPath : readPath(item, "resetPath")
+			}
+			windows.push(w)
+		}
+	}
+
+	const def : CustomQueryDef = {
+		authStyle : authStyle,
+		fractionPercent : fraction,
+		windows : windows
+	}
+	return def
+}
+
+function readPath(item : UTSJSONObject, key : string) : string {
+	const v = item.getString(key)
+	if (v == null) return ""
+	return v
+}
+
+function windowToTier(def : CustomWindowDef, body : UTSJSONObject, fractionPercent : boolean) : QuotaTier | null {
+	// 1) 百分比直读（与 limit/remaining 同时配置时优先）
+	const percent = num(getPathValue(body, def.percentPath))
+	if (percent != null) {
+		let util = percent
+		if (fractionPercent) util = percent * 100.0
+		const resetsAt = extractResetTime(getPathValue(body, def.resetPath))
+		return makeTier(def.name, util, resetsAt, null, null)
+	}
+	// 2) limit / remaining 差值
+	const limit = num(getPathValue(body, def.limitPath))
+	const remaining = num(getPathValue(body, def.remainingPath))
+	if (limit != null && remaining != null && limit > 0.0) {
+		const used = Math.max(limit - remaining, 0.0)
+		const util = used / limit * 100.0
+		const resetsAt = extractResetTime(getPathValue(body, def.resetPath))
+		return makeTier(def.name, util, resetsAt, null, null)
+	}
+	return null
+}
+
+export function fetchCustomJson(url : string, apiKey : string, defJson : string) : Promise<QuotaResult> {
+	const def = parseCustomQueryDef(defJson)
+	if (def == null || def.windows.length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.customInvalid"), false))
+		})
+	}
+
+	let header : UTSJSONObject
+	if (def.authStyle == "none") {
+		header = { "Accept" : "application/json" }
+	} else if (def.authStyle == "raw") {
+		header = { "Authorization" : apiKey, "Accept" : "application/json" }
+	} else {
+		header = { "Authorization" : "Bearer " + apiKey, "Accept" : "application/json" }
+	}
+
+	return getJson(url, header)
+		.then((res : HttpResponse) : QuotaResult => {
+			const statusErr = checkStatus(res.statusCode, res.text)
+			if (statusErr != null) return statusErr
+			const body = res.json
+			if (body == null) return makeFail(t("err.notJson"), false)
+			try {
+				const tiers : QuotaTier[] = []
+				for (let w of def.windows) {
+					const t = windowToTier(w, body, def.fractionPercent)
+					if (t != null) tiers.push(t)
+				}
+				if (tiers.length == 0) {
+					return makeFail(t("err.noQuotaPaths"), false)
+				}
+				return makeOk(tiers, null)
+			} catch (e) {
+				return makeFail(t("err.parseFail"), false)
+			}
+		})
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}

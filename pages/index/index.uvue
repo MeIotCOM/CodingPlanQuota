@@ -1,0 +1,516 @@
+<template>
+	<scroll-view class="page" direction="vertical" show-scrollbar="false">
+		<view class="wrap">
+			<!-- 顶栏：设置入口 -->
+			<view class="topbar">
+				<text class="topbar-hint">{{ topHintText() }}</text>
+				<text class="topbar-link" @click="goSettings">{{ settingsLinkText() }}</text>
+			</view>
+
+			<!-- 空状态 -->
+			<view v-if="cards.length == 0" class="empty">
+				<text class="empty-emoji">📊</text>
+				<text class="empty-title">{{ emptyTitle() }}</text>
+				<text class="empty-desc">{{ emptyDesc() }}</text>
+				<button class="empty-btn" type="primary" @click="addProvider">{{ emptyBtn() }}</button>
+			</view>
+
+			<!-- 供应商卡片 -->
+			<view v-for="(card, index) in cards" :key="card.provider.id" class="card">
+				<view class="card-head" @click="editProvider(card.provider.id)">
+					<view v-if="avatarIcon(card.provider.kind) != ''" class="avatar avatar-light">
+						<image class="avatar-img" :src="avatarIcon(card.provider.kind)" />
+					</view>
+					<view v-else class="avatar" :style="'background-color:' + avatarColor(card.provider.kind)">
+						<text class="avatar-text">{{ avatarLetter(card.provider.kind, card.provider.label) }}</text>
+					</view>
+					<view class="card-title-wrap">
+						<text class="card-title">{{ card.provider.label }}</text>
+						<text class="card-sub">{{ subtitle(card) }}</text>
+					</view>
+					<text class="card-edit">{{ editLabel() }}</text>
+				</view>
+
+				<view v-if="card.errorMsg != ''" class="error-box">
+					<text class="error-text">{{ card.errorMsg }}</text>
+				</view>
+
+				<view v-if="card.balanceText != ''" class="balance-box">
+					<text class="balance-text">{{ card.balanceText }}</text>
+				</view>
+
+				<view v-for="tier in card.tiers" :key="tier.name" class="tier">
+					<view class="tier-row">
+						<text class="tier-name">{{ tierName(tier.name) }}</text>
+						<text :class="'tier-pct ' + pctClass(tier.utilization)">{{ tier.utilization.toFixed(1) }}%</text>
+					</view>
+					<view class="bar">
+						<view :class="'bar-fill ' + fillClass(tier.utilization)" :style="'width:' + barWidth(tier.utilization) + '%;'"></view>
+					</view>
+					<view class="tier-meta">
+						<text v-if="tier.maxValueUsd != null" class="meta-text">{{ usdText(tier.usedValueUsd) + ' / ' + usdText(tier.maxValueUsd) + ' · ' }}</text>
+						<text class="meta-text">{{ '重置 ' + resetText(tier.resetsAt) }}</text>
+					</view>
+				</view>
+
+				<view class="card-foot">
+					<text class="foot-time">{{ queriedText(card.queriedAt, tick) }}</text>
+					<view class="foot-refresh" @click="refreshOne(index)">
+						<image class="refresh-icon" :style="card.loading ? 'opacity:0.35;' : 'opacity:1;'" src="/static/refresh-cw.png"></image>
+					</view>
+				</view>
+			</view>
+
+			<view v-if="cards.length > 0" class="footer">
+				<button class="add-btn" @click="addProvider">{{ addBtnText() }}</button>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { onShow, onHide, onPullDownRefresh } from '@dcloudio/uni-app'
+import { StoredProvider, QuotaResult, QuotaTier } from '../../utils/types'
+import { loadProviders, fetchQuota, kindLabel, protocolLabel, migrateToVaultIfNeeded, kindIconPath } from '../../services/registry'
+import { loadLastQuota, saveLastQuota } from '../../services/lastquota'
+import { loadSettings } from '../../services/settings'
+import { kindAvatarLetter, kindAvatarColor } from '../../services/registry'
+import { tierDisplayName, formatRemaining, formatRelative, formatUsd, clampPct } from '../../utils/format'
+import { t } from '../../utils/i18n'
+
+/** 首页一张卡片的完整渲染状态（避免模板里做可选链，展示字段全部展开） */
+type CardState = {
+	provider : StoredProvider
+	loading : boolean
+	errorMsg : string
+	planMsg : string
+	tiers : QuotaTier[]
+	balanceText : string
+	queriedAt : number
+}
+
+const cards = ref<CardState[]>([])
+
+// ── 模板包装函数 ──
+// uni-app x 模板表达式只能调用本文件 script 内定义的函数；
+// import 进来的工具函数必须经本地包装后才能在模板中使用。
+function tierName(name : string) : string {
+	return tierDisplayName(name)
+}
+function barWidth(v : number) : string {
+	return clampPct(v).toString()
+}
+function usdText(v : number | null) : string {
+	return formatUsd(v)
+}
+function resetText(iso : string | null) : string {
+	return formatRemaining(iso)
+}
+function hhmm(ms : number) : string {
+	try {
+		const d = new Date(ms)
+		const h = d.getHours()
+		const m = d.getMinutes()
+		return (h < 10 ? "0" + h : "" + h) + ":" + (m < 10 ? "0" + m : "" + m)
+	} catch (e) {
+		return "--:--"
+	}
+}
+function queriedText(ms : number, tick : number) : string {
+	// tick 参数仅为让模板绑定依赖每分钟的时钟信号，相对时间自动刷新
+	if (tick < 0) return "—"
+	if (ms <= 0) return "🕐 " + t("time.never")
+	return "🕐 " + formatRelative(ms) + " - " + t("time.updated") + " " + hhmm(ms)
+}
+function avatarLetter(kind : string, label : string) : string {
+	return kindAvatarLetter(kind, label)
+}
+function avatarColor(kind : string) : string {
+	return kindAvatarColor(kind)
+}
+function avatarIcon(kind : string) : string {
+	return kindIconPath(kind)
+}
+// ── 模板文案包装（经 i18n） ──
+function topHintText() : string {
+	return t("home.topHint")
+}
+function settingsLinkText() : string {
+	return t("home.settingsLink")
+}
+function emptyTitle() : string {
+	return t("home.empty.title")
+}
+function emptyDesc() : string {
+	return t("home.empty.desc")
+}
+function emptyBtn() : string {
+	return t("home.empty.btn")
+}
+function editLabel() : string {
+	return t("home.edit")
+}
+function addBtnText() : string {
+	return "＋ " + t("home.empty.btn")
+}
+
+function buildCards() {
+	const list = loadProviders()
+	const out : CardState[] = []
+	for (let p of list) {
+		const c : CardState = {
+			provider : p,
+			loading : false,
+			errorMsg : "",
+			planMsg : "",
+			tiers : [],
+			balanceText : "",
+			queriedAt : 0
+		}
+			// 回填上次查询缓存：打开即有数据，离线也能看最后状态
+			const last = loadLastQuota(p.id)
+			if (last != null) {
+				c.tiers = last.tiers
+				c.queriedAt = last.queriedAt
+				c.planMsg = last.message == null ? "" : (last.message as string)
+				c.balanceText = last.balanceText == null ? "" : (last.balanceText as string)
+				if (!last.success) {
+					let m = last.error
+					if (m == null) m = t("home.lastFailed")
+					c.errorMsg = (m as string)
+				}
+			}
+		out.push(c)
+	}
+	cards.value = out
+}
+
+function refreshOne(index : number) {
+	const card = cards.value[index]
+	if (card.loading) return
+	card.loading = true
+	fetchQuota(card.provider).then((q : QuotaResult) => {
+		card.loading = false
+		if (q.success) {
+			// 成功：全量更新 + 写缓存
+			card.tiers = q.tiers
+			card.planMsg = q.message == null ? "" : (q.message as string)
+			card.balanceText = q.balanceText == null ? "" : (q.balanceText as string)
+			card.errorMsg = ""
+			card.queriedAt = q.queriedAt
+			saveLastQuota(card.provider.id, q)
+		} else {
+			// 失败：不动卡片上已有的数据与更新时间，只追加提示；
+			// 瞬时失败（断网/超时）显示软提示，缓存也只在成功时写入
+			let msg = q.error
+			if (msg == null) msg = t("home.queryFailed")
+			if (q.transient) {
+				msg = t("home.offline")
+			} else if (q.credentialExpired) {
+				msg = (msg as string) + t("home.checkKey")
+			}
+			card.errorMsg = msg as string
+		}
+	}).catch((_e) => {
+		card.loading = false
+		card.errorMsg = t("home.netRetry")
+	})
+}
+
+function refreshAll() {
+	for (let i = 0; i < cards.value.length; i++) {
+		refreshOne(i)
+	}
+}
+
+function subtitle(card : CardState) : string {
+	let base = kindLabel(card.provider.kind)
+	const proto = protocolLabel(card.provider.protocol)
+	if (proto.length > 0) base = base + " · " + proto
+	if (card.planMsg.length > 0) return base + " · " + card.planMsg
+	return base
+}
+
+function pctClass(v : number) : string {
+	if (v >= 80) return "pct-danger"
+	if (v >= 50) return "pct-warn"
+	return "pct-ok"
+}
+
+function fillClass(v : number) : string {
+	if (v >= 80) return "fill-danger"
+	if (v >= 50) return "fill-warn"
+	return "fill-ok"
+}
+
+function addProvider() {
+	uni.navigateTo({ url : "/pages/provider/edit" })
+}
+
+function editProvider(id : string) {
+	uni.navigateTo({ url : "/pages/provider/edit?id=" + id })
+}
+
+function goSettings() {
+	uni.navigateTo({ url : "/pages/settings/settings" })
+}
+
+// ── 前台轮询（按设置间隔自动刷新；onHide 停止） ──
+let pollTimerId = -1
+let tickTimerId = -1
+const tick = ref(0)
+
+function stopTimers() {
+	if (pollTimerId > 0) {
+		clearInterval(pollTimerId)
+		pollTimerId = -1
+	}
+	if (tickTimerId > 0) {
+		clearInterval(tickTimerId)
+		tickTimerId = -1
+	}
+}
+
+function applyTimers() {
+	stopTimers()
+	// 每分钟信号：驱动「x 分钟前」自动刷新
+	tickTimerId = setInterval(() => {
+		tick.value++
+	}, 60000)
+	const s = loadSettings()
+	if (s.pollIntervalMin > 0) {
+		pollTimerId = setInterval(() => {
+			refreshAll()
+		}, s.pollIntervalMin * 60000)
+	}
+}
+
+onShow(() => {
+	uni.setNavigationBarTitle({ title : t("nav.home") })
+	// 旧明文凭据一次性迁入安全存储（幂等）
+	migrateToVaultIfNeeded()
+	buildCards()
+	const s = loadSettings()
+	if (s.autoRefreshOnShow) {
+		refreshAll()
+	}
+	applyTimers()
+})
+
+onHide(() => {
+	stopTimers()
+})
+
+onPullDownRefresh(() => {
+	refreshAll()
+	uni.stopPullDownRefresh()
+})
+</script>
+
+<style>
+.page {
+	flex : 1;
+	background-color : #f2f4f8;
+}
+.wrap {
+	padding : 24rpx;
+}
+
+/* 顶栏 */
+.topbar {
+	flex-direction : row;
+	justify-content : space-between;
+	align-items : center;
+	padding : 4rpx 8rpx 20rpx 8rpx;
+}
+.topbar-hint {
+	font-size : 24rpx;
+	color : #94a3b8;
+}
+.topbar-link {
+	font-size : 26rpx;
+	color : #4338ca;
+}
+
+/* 空状态 */
+.empty {
+	margin-top : 160rpx;
+	flex-direction : column;
+	align-items : center;
+	padding : 0 60rpx;
+}
+.empty-emoji {
+	font-size : 96rpx;
+	margin-bottom : 24rpx;
+}
+.empty-title {
+	font-size : 38rpx;
+	font-weight : bold;
+	color : #1e293b;
+	margin-bottom : 16rpx;
+}
+.empty-desc {
+	font-size : 26rpx;
+	color : #64748b;
+	text-align : center;
+	line-height : 40rpx;
+	margin-bottom : 48rpx;
+}
+.empty-btn {
+	width : 480rpx;
+}
+
+/* 卡片 */
+.card {
+	background-color : #ffffff;
+	border-radius : 24rpx;
+	padding : 28rpx;
+	margin-bottom : 24rpx;
+}
+.card-head {
+	flex-direction : row;
+	align-items : center;
+}
+.avatar {
+	width : 68rpx;
+	height : 68rpx;
+	border-radius : 34rpx;
+	justify-content : center;
+	align-items : center;
+	margin-right : 10rpx;
+}
+.avatar-text {
+	color : #ffffff;
+	font-size : 32rpx;
+	font-weight : bold;
+}
+.avatar-light {
+	background-color : #ffffff;
+}
+.avatar-img {
+	width : 68rpx;
+	height : 68rpx;
+}
+.card-title-wrap {
+	flex-direction : column;
+	flex : 1;
+	margin-right : 12rpx;
+}
+.card-title {
+	font-size : 34rpx;
+	font-weight : bold;
+	color : #0f172a;
+}
+.card-sub {
+	font-size : 24rpx;
+	color : #64748b;
+	margin-top : 6rpx;
+}
+.card-edit {
+	font-size : 24rpx;
+	color : #3b82f6;
+	padding : 8rpx 16rpx;
+}
+
+/* 余额行 */
+.balance-box {
+	background-color : #eff6ff;
+	border-radius : 12rpx;
+	padding : 16rpx 20rpx;
+	margin-top : 20rpx;
+}
+.balance-text {
+	font-size : 30rpx;
+	font-weight : bold;
+	color : #1e40af;
+}
+
+/* 错误提示 */
+.error-box {
+	background-color : #fef2f2;
+	border-radius : 12rpx;
+	padding : 16rpx 20rpx;
+	margin-top : 20rpx;
+}
+.error-text {
+	font-size : 24rpx;
+	color : #dc2626;
+}
+
+/* 窗口行 */
+.tier {
+	margin-top : 28rpx;
+}
+.tier-row {
+	flex-direction : row;
+	justify-content : space-between;
+	align-items : center;
+}
+.tier-name {
+	font-size : 26rpx;
+	color : #475569;
+}
+.tier-pct {
+	font-size : 30rpx;
+	font-weight : bold;
+}
+.pct-ok { color : #16a34a; }
+.pct-warn { color : #d97706; }
+.pct-danger { color : #dc2626; }
+
+.bar {
+	height : 16rpx;
+	background-color : #e2e8f0;
+	border-radius : 8rpx;
+	margin-top : 12rpx;
+	overflow : hidden;
+}
+.bar-fill {
+	height : 16rpx;
+	border-radius : 8rpx;
+}
+.fill-ok { background-color : #22c55e; }
+.fill-warn { background-color : #f59e0b; }
+.fill-danger { background-color : #ef4444; }
+
+.tier-meta {
+	flex-direction : row;
+	margin-top : 10rpx;
+}
+.meta-text {
+	font-size : 22rpx;
+	color : #94a3b8;
+}
+
+/* 卡片底部 */
+.card-foot {
+	flex-direction : row;
+	justify-content : space-between;
+	align-items : center;
+	margin-top : 24rpx;
+}
+.foot-time {
+	font-size : 22rpx;
+	color : #94a3b8;
+}
+.foot-refresh {
+	padding : 4rpx 16rpx;
+}
+.refresh-icon {
+	width : 34rpx;
+	height : 34rpx;
+}
+
+/* 底部添加按钮 */
+.footer {
+	margin-top : 12rpx;
+	margin-bottom : 60rpx;
+}
+.add-btn {
+	background-color : #e0e7ff;
+	color : #4338ca;
+	border-radius : 20rpx;
+	font-size : 28rpx;
+}
+</style>

@@ -1,0 +1,158 @@
+// 智谱 GLM 额度查询（个人版 CN/EN + 团队版）—— 规格见 docs/provider-api-spec.md 第 3 节。
+//
+// GET {quota_base}/api/monitor/usage/quota/limit
+// ⚠️ Authorization 头不加 Bearer 前缀，Key 直接作为值。
+// 团队版：URL 加 ?type=2，另带 bigmodel-organization / bigmodel-project 头。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail, makeTransientFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+/** base_url 含 bigmodel.cn → 国内站；否则（api.z.ai）→ 国际站。registry 用它拼内置默认端点 */
+export function zhipuQuotaBase(baseUrl : string) : string {
+	if (baseUrl.toLowerCase().includes("bigmodel.cn")) {
+		return "https://open.bigmodel.cn"
+	}
+	return "https://api.z.ai"
+}
+
+/** 智谱 limits[] 条目的中间表示（分类排序需要 resetMs） */
+type ZhipuEntry = {
+	resetMs : number | null
+	percentage : number
+	resetsAt : string | null
+	unit : number | null
+}
+
+/**
+ * 解析智谱 limits[] → tier 列表。分类规则（对齐 cc-switch parse_zhipu_token_tiers）：
+ * 1. 显式字段 unit 优先：3 → five_hour，6 → weekly_limit。
+ *    （不能按 nextResetTime 排序代替——周期末尾周窗口会更早重置，时间排序必然标反。）
+ * 2. unit 缺失时兜底：无 reset 的条目优先归 five_hour，其余按 reset 升序填空缺槽位。
+ * 3. 老套餐只回 1 条 → 自然只显示 five_hour。
+ */
+function parseZhipuTokenTiers(data : UTSJSONObject) : QuotaTier[] {
+	let fiveHour : ZhipuEntry | null = null
+	let weekly : ZhipuEntry | null = null
+	const unclassified : ZhipuEntry[] = []
+
+	const limits = data.getArray("limits")
+	if (limits != null) {
+		for (let itemAny of limits) {
+			const item = itemAny as UTSJSONObject
+
+			// 只认 TOKENS_LIMIT / CREDIT_LIMIT（大小写不敏感）
+			const limitType = str(item["type"])
+			if (limitType == null) continue
+			const upper = limitType.toUpperCase()
+			if (upper != "TOKENS_LIMIT" && upper != "CREDIT_LIMIT") continue
+
+			let percentage = num(item["percentage"])
+			if (percentage == null) percentage = 0.0
+			const resetMsRaw = num(item["nextResetTime"])
+			const resetMs = resetMsRaw
+			const resetsAt = extractResetTime(item["nextResetTime"])
+			const unit = num(item["unit"])
+
+			const entry : ZhipuEntry = {
+				resetMs : resetMs,
+				percentage : percentage,
+				resetsAt : resetsAt,
+				unit : unit
+			}
+
+			if (unit != null && unit == 3 && fiveHour == null) {
+				fiveHour = entry
+			} else if (unit != null && unit == 6 && weekly == null) {
+				weekly = entry
+			} else {
+				unclassified.push(entry)
+			}
+		}
+	}
+
+	// 兜底启发式：无 reset 的优先（多归 five_hour），再按 reset 时间升序填空缺槽位
+	unclassified.sort((a : ZhipuEntry, b : ZhipuEntry) : number => {
+		const av = a.resetMs == null ? -1000000000000000.0 : a.resetMs!
+		const bv = b.resetMs == null ? -1000000000000000.0 : b.resetMs!
+		return av - bv
+	})
+	for (let entry of unclassified) {
+		if (fiveHour == null) {
+			fiveHour = entry
+		} else if (weekly == null) {
+			weekly = entry
+		}
+	}
+
+	const tiers : QuotaTier[] = []
+	if (fiveHour != null) {
+		tiers.push(makeTier("five_hour", fiveHour.percentage, fiveHour.resetsAt, null, null))
+	}
+	if (weekly != null) {
+		tiers.push(makeTier("weekly_limit", weekly.percentage, weekly.resetsAt, null, null))
+	}
+	return tiers
+}
+
+/** 智谱响应体解析（个人版与团队版共用同一 shape） */
+function parseZhipu(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		// 业务级错误：success == false 时读 msg
+		const okRaw = body["success"]
+		if (okRaw != null && typeof okRaw == "boolean" && (okRaw as boolean) == false) {
+			let msg = str(body["msg"])
+			if (msg == null) msg = t("err.unknown")
+			return makeFail(t("err.apiPrefix") + msg, false)
+		}
+
+		const data = body.getJSON("data")
+		if (data == null) return makeFail(t("err.noData"), false)
+
+		const tiers = parseZhipuTokenTiers(data)
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+
+		const level = str(data["level"]) // 套餐等级
+		return makeOk(tiers, level)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+function zhipuHeader(apiKey : string) : UTSJSONObject {
+	// ⚠️ 智谱不加 Bearer 前缀
+	const header : UTSJSONObject = {
+		"Authorization" : apiKey,
+		"Content-Type" : "application/json",
+		"Accept-Language" : "en-US,en"
+	}
+	return header
+}
+
+/** 个人版。url 为完整额度端点（内置供应商由 registry 拼，自定义供应商由用户填） */
+export function fetchZhipu(url : string, apiKey : string) : Promise<QuotaResult> {
+	return getJson(url, zhipuHeader(apiKey))
+		.then((res : HttpResponse) : QuotaResult => parseZhipu(res))
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}
+
+/** 团队版：端点需带 ?type=2 + bigmodel-organization / bigmodel-project 头 */
+export function fetchZhipuTeam(url : string, apiKey : string, organizationId : string, projectId : string) : Promise<QuotaResult> {
+	const header : UTSJSONObject = {
+		"Authorization" : apiKey,
+		"Content-Type" : "application/json",
+		"Accept-Language" : "en-US,en",
+		"bigmodel-organization" : organizationId,
+		"bigmodel-project" : projectId
+	}
+	return getJson(url, header)
+		.then((res : HttpResponse) : QuotaResult => parseZhipu(res))
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}

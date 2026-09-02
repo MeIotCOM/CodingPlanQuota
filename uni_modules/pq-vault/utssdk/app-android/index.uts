@@ -1,0 +1,117 @@
+// Android 实现：AndroidKeyStore AES-256/GCM。
+// 密钥材料由系统安全区生成并持有（不可导出），密文（IV+密文，Base64）落应用沙盒 uni storage。
+// 所有函数内部吞异常返回失败值——可用性降级由调用方（utils/vault.uts）统一回落明文。
+
+import KeyStore from "java.security.KeyStore"
+import KeyGenerator from "javax.crypto.KeyGenerator"
+import KeyGenParameterSpec from "android.security.keystore.KeyGenParameterSpec"
+import Cipher from "javax.crypto.Cipher"
+import GCMParameterSpec from "javax.crypto.spec.GCMParameterSpec"
+import ByteArrayOutputStream from "java.io.ByteArrayOutputStream"
+import Arrays from "java.util.Arrays"
+import Base64 from "android.util.Base64"
+
+const ALIAS = "pq_vault_master"
+// ⚠️ 平台 API 需要的整型必须显式标注 Int：UTS 的 number 编译为 Double，会匹配失败
+const GCM_IV_LEN : Int = 12
+// android.util.Base64.NO_WRAP 的值（避免平台常量桥接差异，直接用数值）
+const B64_FLAGS : Int = 2
+
+function getKeystore() : KeyStore | null {
+	try {
+		const ks = KeyStore.getInstance("AndroidKeyStore")
+		ks.load(null)
+		return ks
+	} catch (e) {
+		console.error("pq-vault", e)
+		return null
+	}
+}
+
+function ensureKey() : boolean {
+	try {
+		const ks = getKeystore()
+		if (ks == null) return false
+		if (ks.containsAlias(ALIAS)) return true
+		const kg = KeyGenerator.getInstance("AES", "AndroidKeyStore")
+		// PURPOSE_ENCRYPT(1) | PURPOSE_DECRYPT(2) = 3
+		const spec = new KeyGenParameterSpec.Builder(ALIAS, 3)
+		spec.setBlockModes("GCM")
+		spec.setEncryptionPaddings("NoPadding")
+		spec.setKeySize(256)
+		kg.init(spec.build())
+		kg.generateKey()
+		return true
+	} catch (e) {
+		console.error("pq-vault", e)
+		return false
+	}
+}
+
+export function secureReady() : boolean {
+	try {
+		if (!ensureKey()) return false
+		const ks = getKeystore()
+		if (ks == null) return false
+		return ks.containsAlias(ALIAS)
+	} catch (e) {
+		return false
+	}
+}
+
+export function secureSet(key : string, value : string) : boolean {
+	try {
+		if (!ensureKey()) return false
+		const ks = getKeystore()
+		if (ks == null) return false
+		const secret = ks.getKey(ALIAS, null)
+		const cipher = Cipher.getInstance("AES/GCM/NoPadding")
+		cipher.init(Cipher.ENCRYPT_MODE, secret)
+		const iv = cipher.getIV()
+		const enc = cipher.doFinal(value.encodeToByteArray())
+		// IV + 密文 拼接后 Base64
+		const baos = new ByteArrayOutputStream()
+		baos.write(iv)
+		baos.write(enc)
+		const b64 = Base64.encodeToString(baos.toByteArray(), B64_FLAGS)
+		uni.setStorageSync("pq_vault_" + key, b64)
+		return true
+	} catch (e) {
+		console.error("pq-vault", e)
+		return false
+	}
+}
+
+export function secureGet(key : string) : string | null {
+	try {
+		const raw = uni.getStorageSync("pq_vault_" + key)
+		if (raw == null) return null
+		if (typeof raw != "string") return null
+		const s = raw as string
+		if (s.length == 0) return null
+		if (!ensureKey()) return null
+		const ks = getKeystore()
+		if (ks == null) return null
+		const secret = ks.getKey(ALIAS, null)
+		const all = Base64.decode(s, B64_FLAGS)
+		if (all.size <= GCM_IV_LEN) return null
+		const iv = Arrays.copyOfRange(all, 0, GCM_IV_LEN)
+		const data = Arrays.copyOfRange(all, GCM_IV_LEN, all.size)
+		const cipher = Cipher.getInstance("AES/GCM/NoPadding")
+		cipher.init(Cipher.DECRYPT_MODE, secret, new GCMParameterSpec(128, iv))
+		const plain = cipher.doFinal(data)
+		return plain.decodeToString()
+	} catch (e) {
+		console.error("pq-vault", e)
+		return null
+	}
+}
+
+export function secureRemove(key : string) : boolean {
+	try {
+		uni.removeStorageSync("pq_vault_" + key)
+		return true
+	} catch (e) {
+		return false
+	}
+}

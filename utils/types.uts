@@ -1,0 +1,38 @@
+// 数据层共享类型 —— 与 docs/provider-api-spec.md 第 1 节对齐。
+// 字段语义全部对齐 cc-switch 的 QuotaTier / SubscriptionQuota。
+
+/** 单个时间窗口的额度状态 */
+export type QuotaTier = {
+	name : string           // five_hour | weekly_limit | monthly
+	utilization : number    // 已用百分比 0-100
+	resetsAt : string | null // 重置时间（ISO 8601）
+	usedValueUsd : number | null // 已用美元额度（仅 ZenMux）
+	maxValueUsd : number | null // 窗口美元上限（仅 ZenMux）
+}
+
+/** 一次额度查询的结果 */
+export type QuotaResult = {
+	success : boolean
+	credentialExpired : boolean // 401/403 → 提示重新录入 Key
+	transient : boolean         // 网络断连/超时等瞬时失败 → 保留上次成功数据展示
+	message : string | null     // 套餐等级等附加信息
+	error : string | null       // 确定性失败文案
+	tiers : QuotaTier[]
+	balanceText : string | null // 余额类供应商（DeepSeek）的余额文案
+	queriedAt : number          // 查询时间戳（毫秒）
+}
+
+/** 用户录入的供应商凭据 */
+export type StoredProvider = {
+	id : string
+	kind : string      // kimi | zhipu | zhipu_team | minimax | zenmux | opencode_go | custom
+	label : string     // 用户自定义显示名
+	baseUrl : string   // zhipu/minimax（可选，用于路由 CN/EN）使用；zenmux 与 custom 为完整额度查询端点 URL；其余为空
+	apiKey : string
+	protocol : string  // 仅 kind == custom：解析协议模板（zhipu/zhipu_team/kimi/minimax/zenmux/opencode_go/custom_json）；内置供应商为空
+	customQuery : string // 仅 custom_json 协议：序列化的自定义查询配置（鉴权方式 + JSON 路径映射）
+	accessKeyId : string    // 仅 volcengine：访问密钥 ID
+	secretAccessKey : string // 仅 volcengine：私密访问密钥
+	organizationId : string // 仅 zhipu_team 协议
+	projectId : string      // 仅 zhipu_team 协议
+}

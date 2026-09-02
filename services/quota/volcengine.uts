@@ -1,0 +1,335 @@
+// 火山方舟 Agent Plan / Coding Plan 额度查询。
+// 算法忠实移植自 cc-switch coding_plan.rs（火山变体 SigV4，三处与 AWS4 的差异见签名函数注释）。
+// 规格：docs/provider-api-spec.md 第 7 节。
+// 平台支持：Android（crypto.uts 条件编译）；其他平台给出明确的暂不支持错误。
+
+import { HttpResponse, postEmpty } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail } from './shared'
+import { hmacSha256, sha256Hex, utf8Bytes, cryptoReady } from '../../utils/crypto'
+import { t } from '../../utils/i18n'
+
+const OPENAPI_HOST = "open.volcengineapi.com"
+const API_VERSION = "2024-01-01"
+const DEFAULT_REGION = "cn-beijing"
+const SERVICE = "ark"
+const CONTENT_TYPE = "application/json; charset=utf-8"
+const SIGNED_HEADERS = "host;x-date;x-content-sha256;content-type"
+// 空 body 的 SHA-256（恒定值，无需运行时计算）
+const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+/** 从推理 base_url 提取 Region（ark.cn-beijing.volces.com → cn-beijing），回落 cn-beijing */
+export function volcRegion(baseUrl : string) : string {
+	let host = baseUrl
+	const protoParts = baseUrl.split("://")
+	if (protoParts.length == 2) host = protoParts[1]
+	const segs = host.split("/")
+	if (segs.length > 0) host = segs[0]
+	const hostParts = host.split(".")
+	for (let p of hostParts) {
+		if (p.startsWith("cn-") || p.startsWith("ap-")) return p
+	}
+	return DEFAULT_REGION
+}
+
+function isAuthErrorCode(code : string) : boolean {
+	const c = code.toLowerCase()
+	return c.includes("auth") || c.includes("signature") || c.includes("accessdenied")
+		|| c.includes("denied") || c.includes("unauthorized") || c.includes("forbidden")
+		|| c.includes("credential") || c.includes("token")
+}
+
+/** RFC3986 unreserved 之外全部 %XX 编码（键值均为纯 ASCII） */
+function uriEncode(input : string) : string {
+	let out = ""
+	for (let i = 0; i < input.length; i++) {
+		// ⚠️ UTS 的 charCodeAt 返回可空 Number?（越位为 null），比较前必须判空
+		const raw = input.charCodeAt(i)
+		if (raw == null) continue
+		const v = raw as number
+		if ((v >= 65 && v <= 90) || (v >= 97 && v <= 122) || (v >= 48 && v <= 57)
+			|| v == 45 || v == 95 || v == 46 || v == 126) {
+			out += String.fromCharCode(v)
+		} else {
+			const h = v.toString(16).toUpperCase()
+			out += "%" + (h.length == 1 ? "0" + h : h)
+		}
+	}
+	return out
+}
+
+function canonicalQuery(action : string, region : string) : string {
+	// 按 key 字母序：Action, Region, Version
+	return "Action=" + uriEncode(action) + "&Region=" + uriEncode(region) + "&Version=" + uriEncode(API_VERSION)
+}
+
+type VolcTime = {
+	xDate : string
+	shortDate : string
+}
+
+/** UTC 时间 → yyyyMMddTHHmmssZ / yyyyMMdd（从 toISOString 切片，规避平台日期 API 差异） */
+function utcTimestamps() : VolcTime {
+	const iso = new Date().toISOString() // 2026-09-02T08:12:34.567Z
+	const dateSegs = iso.split("T")[0].split("-")
+	const timePart = iso.split("T")[1]
+	const hms = timePart.split(".")[0].split(":").join("")
+	const v : VolcTime = {
+		xDate : dateSegs.join("") + "T" + hms + "Z",
+		shortDate : dateSegs.join("")
+	}
+	return v
+}
+
+type VolcAuth = {
+	authorization : string
+	xDate : string
+	sha : string
+}
+
+/** 火山签名 V4。与标准 AWS4 的三点差异：
+ *  1. canonical headers 固定顺序 host;x-date;x-content-sha256;content-type（不按字母序）
+ *  2. 算法串 "HMAC-SHA256"（无 AWS4 前缀）、scope 终止 "request"（非 aws4_request）
+ *  3. kDate = HMAC(SK, date)，SK 不加 AWS4 前缀 */
+function sign(ak : string, sk : string, region : string, query : string) : VolcAuth {
+	const tm = utcTimestamps()
+	const canonicalHeaders = "host:" + OPENAPI_HOST + "\nx-date:" + tm.xDate
+		+ "\nx-content-sha256:" + EMPTY_SHA256 + "\ncontent-type:" + CONTENT_TYPE + "\n"
+	const canonicalRequest = "POST\n/\n" + query + "\n" + canonicalHeaders + "\n" + SIGNED_HEADERS + "\n" + EMPTY_SHA256
+	const credentialScope = tm.shortDate + "/" + region + "/" + SERVICE + "/request"
+	const stringToSign = "HMAC-SHA256\n" + tm.xDate + "\n" + credentialScope + "\n" + sha256Hex(utf8Bytes(canonicalRequest))
+
+	const skBytes = utf8Bytes(sk)
+	const kDate = hmacSha256(skBytes, utf8Bytes(tm.shortDate))
+	const kRegion = hmacSha256(kDate, utf8Bytes(region))
+	const kService = hmacSha256(kRegion, utf8Bytes(SERVICE))
+	const kSigning = hmacSha256(kService, utf8Bytes("request"))
+	const sigBytes = hmacSha256(kSigning, utf8Bytes(stringToSign))
+
+	let signature = ""
+	for (let b of sigBytes) {
+		const v = b.toInt() & 0xFF
+		signature += v < 16 ? "0" + v.toString(16) : v.toString(16)
+	}
+	const v : VolcAuth = {
+		authorization : "HMAC-SHA256 Credential=" + ak + "/" + credentialScope
+			+ ", SignedHeaders=" + SIGNED_HEADERS + ", Signature=" + signature,
+		xDate : tm.xDate,
+		sha : EMPTY_SHA256
+	}
+	return v
+}
+
+type VolcErrorPair = {
+	code : string
+	msg : string
+}
+
+/** OpenAPI 信封错误（ResponseMetadata.Error 或顶层 Error）；无错误返回 null */
+function responseError(body : UTSJSONObject) : VolcErrorPair | null {
+	let err = body.getJSON("ResponseMetadata")
+	if (err != null) err = err.getJSON("Error")
+	if (err == null) err = body.getJSON("Error")
+	if (err == null) return null
+	const code = str(err["Code"])
+	const msg = str(err["Message"])
+	const c = code == null ? "" : (code as string)
+	const m = msg == null ? "" : (msg as string)
+	if (c.length == 0 && m.length == 0) return null
+	const pair : VolcErrorPair = { code : c, msg : m }
+	return pair
+}
+
+type VolcOutcome = {
+	kind : string   // body | auth | soft | transient
+	body : UTSJSONObject | null
+	detail : string
+}
+
+function openApiCall(region : string, ak : string, sk : string, action : string) : Promise<VolcOutcome> {
+	const query = canonicalQuery(action, region)
+	const url = "https://" + OPENAPI_HOST + "/?" + query
+	const auth = sign(ak, sk, region, query)
+	const header : UTSJSONObject = {
+		"X-Date" : auth.xDate,
+		"X-Content-Sha256" : auth.sha,
+		"Content-Type" : CONTENT_TYPE,
+		"Authorization" : auth.authorization
+	}
+	return postEmpty(url, header).then((res : HttpResponse) : VolcOutcome => {
+		if (res.statusCode == 401 || res.statusCode == 403) {
+			const o : VolcOutcome = { kind : "auth", body : null, detail : t("err.authFail") + "（HTTP " + res.statusCode + "）" }
+			return o
+		}
+		if (res.statusCode < 200 || res.statusCode >= 300) {
+			if (res.json != null) {
+				const e = responseError(res.json!)
+				if (e != null) {
+					if (isAuthErrorCode(e.code)) {
+						const o : VolcOutcome = { kind : "auth", body : null, detail : t("err.authFail") + "（HTTP " + res.statusCode + " " + e.code + "）：" + e.msg }
+						return o
+					}
+					const o : VolcOutcome = { kind : "soft", body : null, detail : "API error (HTTP " + res.statusCode + ", " + e.code + "): " + e.msg }
+					return o
+				}
+			}
+			const o : VolcOutcome = { kind : "soft", body : null, detail : "API error (HTTP " + res.statusCode + ")" }
+			return o
+		}
+		if (res.json == null) {
+			const o : VolcOutcome = { kind : "soft", body : null, detail : t("err.notJson") }
+			return o
+		}
+		const e = responseError(res.json!)
+		if (e != null) {
+			if (isAuthErrorCode(e.code)) {
+				const o : VolcOutcome = { kind : "auth", body : null, detail : t("err.authFail") + "（" + e.code + "）：" + e.msg }
+				return o
+			}
+			const o : VolcOutcome = { kind : "soft", body : null, detail : "API error (" + e.code + "): " + e.msg }
+			return o
+		}
+		const o : VolcOutcome = { kind : "body", body : res.json, detail : "" }
+		return o
+	}).catch((_e) : VolcOutcome => {
+		const o : VolcOutcome = { kind : "transient", body : null, detail : t("err.network") }
+		return o
+	})
+}
+
+/** GetAFPUsage（Agent Plan）：5h/周/月三窗口，绝对值 Quota/Used → 百分比；Quota<=0 跳过 */
+function parseAfpTiers(result : UTSJSONObject) : QuotaTier[] {
+	const tiers : QuotaTier[] = []
+	const keys = ["AFPFiveHour", "AFPWeekly", "AFPMonthly"]
+	const names = ["five_hour", "weekly_limit", "monthly"]
+	for (let i = 0; i < keys.length; i++) {
+		const win = result.getJSON(keys[i])
+		if (win == null) continue
+		const quota = num(win["Quota"])
+		if (quota == null || (quota as number) <= 0.0) continue
+		const used = num(win["Used"])
+		const usedVal = used == null ? 0.0 : (used as number)
+		const resetsAt = extractResetTime(win["ResetTime"])
+		tiers.push(makeTier(names[i], usedVal / (quota as number) * 100.0, resetsAt, null, null))
+	}
+	return tiers
+}
+
+/** GetCodingPlanUsage 的窗口标签归一 */
+function codingWindow(label : string) : string {
+	const l = label.toLowerCase()
+	if (l == "session" || l == "5h" || l == "fivehour" || l == "five_hour" || l == "rolling_5h") return "five_hour"
+	if (l == "weekly" || l == "week" || l == "7d") return "weekly_limit"
+	if (l == "monthly" || l == "month") return "monthly"
+	return ""
+}
+
+/** GetCodingPlanUsage：QuotaUsage/Usages/Details 数组，宽松字段匹配，只给百分比 */
+function parseCodingPlanTiers(result : UTSJSONObject) : QuotaTier[] {
+	const tiers : QuotaTier[] = []
+	let arr = result.getArray("QuotaUsage")
+	if (arr == null) arr = result.getArray("Usages")
+	if (arr == null) arr = result.getArray("Details")
+	if (arr == null) return tiers
+
+	for (let itemAny of arr) {
+		const item = itemAny as UTSJSONObject
+		// 实测字段为 Level（2026-06-21），其余作防御式回落
+		let label = str(item["Level"])
+		if (label == null) label = str(item["Type"])
+		if (label == null) label = str(item["Period"])
+		if (label == null) label = str(item["Label"])
+		if (label == null) label = str(item["Window"])
+		if (label == null) continue
+		const tierName = codingWindow(label as string)
+		if (tierName.length == 0) continue
+		let utilization = num(item["Percent"])
+		if (utilization == null) utilization = num(item["UsedPercent"])
+		if (utilization == null) utilization = num(item["UsagePercent"])
+		const util = utilization == null ? 0.0 : (utilization as number)
+		let resetsAt = extractResetTime(item["ResetTime"])
+		if (resetsAt == null) resetsAt = extractResetTime(item["ResetTimestamp"])
+		tiers.push(makeTier(tierName, util, resetsAt, null, null))
+	}
+	return tiers
+}
+
+function summarize(action : string, body : UTSJSONObject) : string {
+	const raw = JSON.stringify(body)
+	if (raw.length > 700) return action + "=" + raw.substring(0, 700)
+	return action + "=" + raw
+}
+
+/** 火山方舟查询入口：AK/SK，GetAFPUsage → GetCodingPlanUsage 双 plan 自动探测 */
+export function fetchVolcengine(baseUrl : string, accessKeyId : string, secretAccessKey : string) : Promise<QuotaResult> {
+	if (!cryptoReady()) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.platformUnsupported"), false))
+		})
+	}
+	if (accessKeyId.trim().length == 0 || secretAccessKey.trim().length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.noAkSk"), false))
+		})
+	}
+	const region = volcRegion(baseUrl)
+	const softErrors : string[] = []
+	const emptyResponses : string[] = []
+
+	return openApiCall(region, accessKeyId, secretAccessKey, "GetAFPUsage").then((r1 : VolcOutcome) : Promise<QuotaResult> => {
+		if (r1.kind == "auth") {
+			return new Promise<QuotaResult>((resolve) => {
+				resolve(makeFail(r1.detail + " " + t("err.volcHint"), true))
+			})
+		}
+		if (r1.kind == "transient") {
+			return new Promise<QuotaResult>((resolve) => {
+				resolve(makeFail(r1.detail, false))
+			})
+		}
+		if (r1.kind == "soft") softErrors.push("GetAFPUsage: " + r1.detail)
+		if (r1.kind == "body" && r1.body != null) {
+			let result = r1.body!.getJSON("Result")
+			if (result == null) result = r1.body
+			const tiers = parseAfpTiers(result!)
+			if (tiers.length > 0) {
+				const planType = str(result!["PlanType"])
+				let plan = "Agent Plan"
+				if (planType != null && (planType as string).trim().length > 0) {
+					plan = plan + " " + (planType as string).trim()
+				}
+				return new Promise<QuotaResult>((resolve) => {
+					resolve(makeOk(tiers, plan))
+				})
+			}
+			emptyResponses.push(summarize("GetAFPUsage", r1.body!))
+		}
+
+		// 2) Coding Plan：GetCodingPlanUsage
+		return openApiCall(region, accessKeyId, secretAccessKey, "GetCodingPlanUsage").then((r2 : VolcOutcome) : QuotaResult => {
+			if (r2.kind == "auth") {
+				return makeFail(r2.detail + " " + t("err.volcHint"), true)
+			}
+			if (r2.kind == "transient") {
+				return makeFail(r2.detail, false)
+			}
+			if (r2.kind == "soft") softErrors.push("GetCodingPlanUsage: " + r2.detail)
+			if (r2.kind == "body" && r2.body != null) {
+				let result = r2.body!.getJSON("Result")
+				if (result == null) result = r2.body
+				const tiers = parseCodingPlanTiers(result!)
+				if (tiers.length > 0) {
+					return makeOk(tiers, "Coding Plan")
+				}
+				emptyResponses.push(summarize("GetCodingPlanUsage", r2.body!))
+			}
+			if (softErrors.length > 0) {
+				return makeFail(softErrors.join("; "), false)
+			}
+			if (emptyResponses.length > 0) {
+				return makeFail(t("err.volcNoSubRaw") + emptyResponses.join(" || "), false)
+			}
+			return makeFail(t("err.volcNoSub"), false)
+		})
+	})
+}

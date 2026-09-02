@@ -1,0 +1,597 @@
+<template>
+	<scroll-view class="page" direction="vertical" show-scrollbar="false">
+		<view class="wrap">
+			<!-- 供应商类型 -->
+			<text class="section-title">{{ kindTitle() }}</text>
+			<view class="chips">
+				<view v-for="(meta, index) in kinds" :key="meta.kind"
+					:class="'chip ' + (kindIndex == index ? 'chip-active' : '')"
+					@click="selectKind(index)">
+					<text :class="'chip-text ' + (kindIndex == index ? 'chip-text-active' : '')">{{ kindChipText(meta) }}</text>
+				</view>
+			</view>
+			<text class="section-note">{{ curNote() }}</text>
+
+			<!-- 解析协议（仅自定义供应商） -->
+			<view v-if="curNeedsProtocol()">
+				<text class="section-title">{{ protocolTitle() }}</text>
+				<view class="chips">
+					<view v-for="(meta, index) in protocols" :key="meta.id"
+						:class="'chip ' + (protocolIndex == index ? 'chip-active' : '')"
+						@click="selectProtocol(index)">
+						<text :class="'chip-text ' + (protocolIndex == index ? 'chip-text-active' : '')">{{ protoChipText(meta) }}</text>
+					</view>
+				</view>
+				<text class="section-note">{{ curProtocolHint() }}</text>
+			</view>
+
+			<!-- 自定义 JSON 映射配置 -->
+			<view v-if="isCustomJson()">
+				<text class="section-title">{{ authTitle() }}</text>
+				<view class="chips">
+					<view v-for="(opt, index) in authLabels" :key="opt"
+						:class="'chip ' + (authIndex == index ? 'chip-active' : '')"
+						@click="setAuth(index)">
+						<text :class="'chip-text ' + (authIndex == index ? 'chip-text-active' : '')">{{ opt }}</text>
+					</view>
+				</view>
+
+				<text class="section-title">{{ scaleTitle() }}</text>
+				<view class="chips">
+					<view v-for="(opt, index) in scaleLabels" :key="opt"
+						:class="'chip ' + (scaleIndex == index ? 'chip-active' : '')"
+						@click="setScale(index)">
+						<text :class="'chip-text ' + (scaleIndex == index ? 'chip-text-active' : '')">{{ opt }}</text>
+					</view>
+				</view>
+
+				<text class="section-title">{{ w1Title() }}</text>
+				<input class="input input-gap" v-model="w1Percent" :placeholder="percentPh()" />
+				<input class="input input-gap" v-model="w1Limit" :placeholder="limitPh()" />
+				<input class="input input-gap" v-model="w1Remaining" :placeholder="remainingPh()" />
+				<input class="input input-gap" v-model="w1Reset" :placeholder="resetPh()" />
+
+				<text class="section-title">{{ w2Title() }}</text>
+				<input class="input input-gap" v-model="w2Percent" :placeholder="percentPhShort()" />
+				<input class="input input-gap" v-model="w2Limit" :placeholder="limitPhShort()" />
+				<input class="input input-gap" v-model="w2Remaining" :placeholder="remainingPhShort()" />
+				<input class="input input-gap" v-model="w2Reset" :placeholder="resetPhShort()" />
+
+				<text class="section-note">{{ pathsNoteText() }}</text>
+			</view>
+
+			<!-- 名称 -->
+			<text class="section-title">{{ nameTitle() }}</text>
+			<input class="input" v-model="label" :placeholder="namePh()" />
+
+			<!-- API Key -->
+			<text class="section-title">{{ keyTitle() }}</text>
+			<input class="input" v-model="apiKey" password="true" :placeholder="keyPh()" />
+			<text class="section-note">{{ keyNote() }}</text>
+
+			<!-- Base URL（按类型条件展示） -->
+			<view v-if="curNeedsBaseUrl()">
+				<text class="section-title">{{ baseUrlTitle() }}</text>
+				<input class="input" v-model="baseUrl" :placeholder="curBaseUrlHint()" />
+			</view>
+
+			<!-- 火山方舟：AK/SK -->
+			<view v-if="showAkSk()">
+				<text class="section-title">{{ akTitle() }}</text>
+				<input class="input" v-model="accessKeyId" :placeholder="akPh()" />
+				<text class="section-title">{{ skTitle() }}</text>
+				<input class="input" v-model="secretAccessKey" password="true" :placeholder="skPh()" />
+			</view>
+
+			<!-- 智谱团队协议：组织 / 项目 ID -->
+			<view v-if="showTeamFields()">
+				<text class="section-title">{{ orgTitle() }}</text>
+				<input class="input" v-model="organizationId" :placeholder="orgPh()" />
+				<text class="section-title">{{ projTitle() }}</text>
+				<input class="input" v-model="projectId" :placeholder="projPh()" />
+			</view>
+
+			<!-- 操作 -->
+			<button class="save-btn" type="primary" @click="save">{{ saveLabel() }}</button>
+			<button v-if="isEditing" class="delete-btn" @click="remove">{{ deleteLabel() }}</button>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
+import { StoredProvider } from '../../utils/types'
+import { PROVIDER_KINDS, ProviderKindMeta, PROTOCOLS, ProtocolMeta, loadProviders, saveProviders, deleteProvider, genId } from '../../services/registry'
+import { t } from '../../utils/i18n'
+
+const kinds = PROVIDER_KINDS
+const protocols = PROTOCOLS
+
+const editingId = ref<string | null>(null)
+const isEditing = ref(false)
+const label = ref("")
+const kindIndex = ref(0)
+const protocolIndex = ref(0)
+const baseUrl = ref("")
+const apiKey = ref("")
+const organizationId = ref("")
+const projectId = ref("")
+const accessKeyId = ref("")
+const secretAccessKey = ref("")
+
+// ── 自定义 JSON 映射（协议 custom_json）的表单状态 ──
+const AUTH_STYLES : string[] = ["bearer", "raw", "none"]
+const authLabels : string[] = [t("edit.authBearer"), t("edit.authRaw"), t("edit.authNone")]
+const scaleLabels : string[] = [t("edit.scale100"), t("edit.scale01")]
+const authIndex = ref(0)
+const scaleIndex = ref(0)
+const w1Percent = ref("")
+const w1Limit = ref("")
+const w1Remaining = ref("")
+const w1Reset = ref("")
+const w2Percent = ref("")
+const w2Limit = ref("")
+const w2Remaining = ref("")
+const w2Reset = ref("")
+
+function curMeta() : ProviderKindMeta {
+	return kinds[kindIndex.value]
+}
+// ── 模板文案包装（经 i18n） ──
+function kindTitle() : string {
+	return t("edit.kindTitle")
+}
+function kindChipText(meta : ProviderKindMeta) : string {
+	return t(meta.labelKey)
+}
+function protocolTitle() : string {
+	return t("edit.protocolTitle")
+}
+function protoChipText(meta : ProtocolMeta) : string {
+	return t(meta.labelKey)
+}
+function authTitle() : string {
+	return t("edit.auth")
+}
+function scaleTitle() : string {
+	return t("edit.scaleTitle")
+}
+function w1Title() : string {
+	return t("edit.w1")
+}
+function w2Title() : string {
+	return t("edit.w2")
+}
+function percentPh() : string {
+	return t("edit.percentPh")
+}
+function limitPh() : string {
+	return t("edit.limitPh")
+}
+function remainingPh() : string {
+	return t("edit.remainingPh")
+}
+function resetPh() : string {
+	return t("edit.resetPh")
+}
+function percentPhShort() : string {
+	return t("edit.percentPhShort")
+}
+function limitPhShort() : string {
+	return t("edit.limitPhShort")
+}
+function remainingPhShort() : string {
+	return t("edit.remainingPhShort")
+}
+function resetPhShort() : string {
+	return t("edit.resetPhShort")
+}
+function pathsNoteText() : string {
+	return t("edit.pathsNote")
+}
+function nameTitle() : string {
+	return t("edit.nameTitle")
+}
+function namePh() : string {
+	return t("edit.namePh")
+}
+function keyTitle() : string {
+	return t("edit.keyTitle")
+}
+function keyPh() : string {
+	return t("edit.keyPh")
+}
+function keyNote() : string {
+	return t("edit.keyNote")
+}
+function baseUrlTitle() : string {
+	return t("edit.baseUrlRequired")
+}
+function orgTitle() : string {
+	return t("edit.orgTitle")
+}
+function orgPh() : string {
+	return t("edit.orgPh")
+}
+function projTitle() : string {
+	return t("edit.projTitle")
+}
+function projPh() : string {
+	return t("edit.projPh")
+}
+function saveLabel() : string {
+	return t("edit.save")
+}
+function akTitle() : string {
+	return t("edit.akTitle")
+}
+function akPh() : string {
+	return t("edit.akPh")
+}
+function skTitle() : string {
+	return t("edit.skTitle")
+}
+function skPh() : string {
+	return t("edit.skPh")
+}
+/** 火山方舟：需要 AK/SK 输入 */
+function showAkSk() : boolean {
+	return curMeta().needsAkSk
+}
+function deleteLabel() : string {
+	return t("edit.delete")
+}
+function curNote() : string {
+	return t(curMeta().noteKey)
+}
+function curNeedsBaseUrl() : boolean {
+	return curMeta().needsBaseUrl
+}
+function curBaseUrlOptional() : boolean {
+	return curMeta().baseUrlOptional
+}
+function curNeedsTeamFields() : boolean {
+	return curMeta().needsTeamFields
+}
+function curBaseUrlHint() : string {
+	return curMeta().baseUrlHint
+}
+function curNeedsProtocol() : boolean {
+	return curMeta().needsProtocol
+}
+function curProtocolMeta() : ProtocolMeta {
+	return protocols[protocolIndex.value]
+}
+function curProtocolHint() : string {
+	return t(curProtocolMeta().hintKey)
+}
+/** 团队字段：内置 zhipu_team，或自定义供应商选了智谱团队协议 */
+function showTeamFields() : boolean {
+	if (curMeta().needsTeamFields) return true
+	if (curMeta().needsProtocol) return curProtocolMeta().needsTeamFields
+	return false
+}
+
+function selectProtocol(index : number) {
+	protocolIndex.value = index
+}
+
+function protocolIndexOf(protocol : string) : number {
+	for (let i = 0; i < protocols.length; i++) {
+		if (protocols[i].id == protocol) return i
+	}
+	return 0
+}
+
+function isCustomJson() : boolean {
+	return curMeta().needsProtocol && curProtocolMeta().id == "custom_json"
+}
+
+function setAuth(index : number) {
+	authIndex.value = index
+}
+
+function setScale(index : number) {
+	scaleIndex.value = index
+}
+
+function readFormPath(item : UTSJSONObject, key : string) : string {
+	const v = item.getString(key)
+	if (v == null) return ""
+	return v
+}
+
+/** 表单 → 序列化配置；一个可用窗口都没有时返回 null */
+function buildCustomQueryJson() : string | null {
+	const windows : Array<UTSJSONObject> = []
+	if (w1Percent.value.trim().length > 0 || w1Limit.value.trim().length > 0 || w1Remaining.value.trim().length > 0) {
+		const w : UTSJSONObject = {
+			"name" : "five_hour",
+			"percentPath" : w1Percent.value.trim(),
+			"limitPath" : w1Limit.value.trim(),
+			"remainingPath" : w1Remaining.value.trim(),
+			"resetPath" : w1Reset.value.trim()
+		}
+		windows.push(w)
+	}
+	if (w2Percent.value.trim().length > 0 || w2Limit.value.trim().length > 0 || w2Remaining.value.trim().length > 0) {
+		const w : UTSJSONObject = {
+			"name" : "weekly_limit",
+			"percentPath" : w2Percent.value.trim(),
+			"limitPath" : w2Limit.value.trim(),
+			"remainingPath" : w2Remaining.value.trim(),
+			"resetPath" : w2Reset.value.trim()
+		}
+		windows.push(w)
+	}
+	if (windows.length == 0) return null
+	const def : UTSJSONObject = {
+		"authStyle" : AUTH_STYLES[authIndex.value],
+		"fractionPercent" : scaleIndex.value == 1,
+		"windows" : windows
+	}
+	return JSON.stringify(def)
+}
+
+/** 已存配置 → 表单回填 */
+function customQueryToForm(json : string) {
+	authIndex.value = 0
+	scaleIndex.value = 0
+	w1Percent.value = ""
+	w1Limit.value = ""
+	w1Remaining.value = ""
+	w1Reset.value = ""
+	w2Percent.value = ""
+	w2Limit.value = ""
+	w2Remaining.value = ""
+	w2Reset.value = ""
+	if (json.length == 0) return
+	const obj = JSON.parse<UTSJSONObject>(json)
+	if (obj == null) return
+
+	const as = obj.getString("authStyle")
+	if (as != null) {
+		for (let i = 0; i < AUTH_STYLES.length; i++) {
+			if (AUTH_STYLES[i] == as) {
+				authIndex.value = i
+				break
+			}
+		}
+	}
+	const frac = obj.getBoolean("fractionPercent")
+	scaleIndex.value = (frac != null && frac) ? 1 : 0
+
+	const windows = obj.getArray("windows")
+	if (windows == null) return
+	if (windows.length > 0) {
+		const w1 = windows[0] as UTSJSONObject
+		w1Percent.value = readFormPath(w1, "percentPath")
+		w1Limit.value = readFormPath(w1, "limitPath")
+		w1Remaining.value = readFormPath(w1, "remainingPath")
+		w1Reset.value = readFormPath(w1, "resetPath")
+	}
+	if (windows.length > 1) {
+		const w2 = windows[1] as UTSJSONObject
+		w2Percent.value = readFormPath(w2, "percentPath")
+		w2Limit.value = readFormPath(w2, "limitPath")
+		w2Remaining.value = readFormPath(w2, "remainingPath")
+		w2Reset.value = readFormPath(w2, "resetPath")
+	}
+}
+
+function selectKind(index : number) {
+	kindIndex.value = index
+}
+
+function kindIndexOf(kind : string) : number {
+	for (let i = 0; i < kinds.length; i++) {
+		if (kinds[i].kind == kind) return i
+	}
+	return 0
+}
+
+function toast(msg : string) {
+	uni.showToast({ title : msg, icon : "none" })
+}
+
+function save() {
+	const meta = curMeta()
+	if (label.value.trim().length == 0) {
+		toast(t("edit.toast.noName"))
+		return
+	}
+	if (apiKey.value.trim().length == 0) {
+		toast(t("edit.toast.noKey"))
+		return
+	}
+	if (meta.needsBaseUrl && !meta.baseUrlOptional && baseUrl.value.trim().length == 0) {
+		toast(t("edit.toast.noBaseUrl"))
+		return
+	}
+	if (meta.needsProtocol && !baseUrl.value.trim().toLowerCase().startsWith("http")) {
+		toast(t("edit.toast.badUrl"))
+		return
+	}
+	if (meta.needsAkSk) {
+		if (accessKeyId.value.trim().length == 0 || secretAccessKey.value.trim().length == 0) {
+			toast(t("edit.toast.noAkSk"))
+			return
+		}
+	}
+	if (showTeamFields()) {
+		if (organizationId.value.trim().length == 0 || projectId.value.trim().length == 0) {
+			toast(t("edit.toast.team"))
+			return
+		}
+	}
+	const protocol = meta.kind == "custom" ? protocols[protocolIndex.value].id : ""
+	let customQuery = ""
+	if (meta.kind == "custom" && protocol == "custom_json") {
+		const q = buildCustomQueryJson()
+		if (q == null) {
+			toast(t("edit.toast.w1"))
+			return
+		}
+		customQuery = (q as string)
+	}
+
+	const list = loadProviders()
+	const eid = editingId.value
+	if (eid != null && isEditing.value) {
+		// 更新已有
+		for (let i = 0; i < list.length; i++) {
+			if (list[i].id == eid) {
+				const updated : StoredProvider = {
+					id : eid,
+					kind : meta.kind,
+					label : label.value.trim(),
+					baseUrl : baseUrl.value.trim(),
+					apiKey : apiKey.value.trim(),
+					accessKeyId : accessKeyId.value.trim(),
+					secretAccessKey : secretAccessKey.value.trim(),
+					protocol : protocol,
+					customQuery : customQuery,
+					organizationId : organizationId.value.trim(),
+					projectId : projectId.value.trim()
+				}
+				list[i] = updated
+				break
+			}
+		}
+	} else {
+		// 新增
+		const p : StoredProvider = {
+			id : genId(),
+			kind : meta.kind,
+			label : label.value.trim(),
+			baseUrl : baseUrl.value.trim(),
+			apiKey : apiKey.value.trim(),
+			accessKeyId : accessKeyId.value.trim(),
+			secretAccessKey : secretAccessKey.value.trim(),
+			protocol : protocol,
+			customQuery : customQuery,
+			organizationId : organizationId.value.trim(),
+			projectId : projectId.value.trim()
+		}
+		list.push(p)
+	}
+	saveProviders(list)
+	uni.navigateBack()
+}
+
+function remove() {
+	const eid = editingId.value
+	if (eid == null || !isEditing.value) {
+		toast(t("edit.toast.notSaved"))
+		return
+	}
+	uni.showModal({
+		title : t("edit.delTitle"),
+		content : t("edit.delConfirm"),
+		success : (res) => {
+			if (res.confirm) {
+				deleteProvider(eid)
+				uni.navigateBack()
+			}
+		}
+	})
+}
+
+onLoad((options) => {
+	uni.setNavigationBarTitle({ title : t("nav.edit") })
+	const id = options?.get("id")
+	if (id != null) {
+		editingId.value = id
+		isEditing.value = true
+		const list = loadProviders()
+		for (let p of list) {
+			if (p.id == id) {
+				label.value = p.label
+				kindIndex.value = kindIndexOf(p.kind)
+				protocolIndex.value = protocolIndexOf(p.protocol)
+				baseUrl.value = p.baseUrl
+				apiKey.value = p.apiKey
+				organizationId.value = p.organizationId
+				projectId.value = p.projectId
+				accessKeyId.value = p.accessKeyId
+				secretAccessKey.value = p.secretAccessKey
+				customQueryToForm(p.customQuery)
+				break
+			}
+		}
+	}
+})
+</script>
+
+<style>
+.page {
+	flex : 1;
+	background-color : #f2f4f8;
+}
+.wrap {
+	padding : 24rpx 32rpx 80rpx 32rpx;
+}
+
+.section-title {
+	font-size : 26rpx;
+	color : #475569;
+	margin-top : 36rpx;
+	margin-bottom : 16rpx;
+}
+.section-note {
+	font-size : 22rpx;
+	color : #94a3b8;
+	margin-top : 12rpx;
+	line-height : 34rpx;
+}
+
+/* 类型选择 chips */
+.chips {
+	flex-direction : row;
+	flex-wrap : wrap;
+}
+.chip {
+	background-color : #ffffff;
+	border-radius : 32rpx;
+	padding : 14rpx 28rpx;
+	margin-right : 16rpx;
+	margin-bottom : 16rpx;
+}
+.chip-active {
+	background-color : #4338ca;
+}
+.chip-text {
+	font-size : 26rpx;
+	color : #334155;
+}
+.chip-text-active {
+	color : #ffffff;
+}
+
+/* 输入框 */
+.input {
+	background-color : #ffffff;
+	border-radius : 16rpx;
+	padding : 20rpx 24rpx;
+	font-size : 28rpx;
+	color : #0f172a;
+}
+.input-gap {
+	margin-bottom : 12rpx;
+}
+
+/* 操作按钮 */
+.save-btn {
+	margin-top : 56rpx;
+	border-radius : 20rpx;
+	font-size : 30rpx;
+}
+.delete-btn {
+	margin-top : 24rpx;
+	border-radius : 20rpx;
+	font-size : 28rpx;
+	background-color : #fee2e2;
+	color : #dc2626;
+}
+</style>

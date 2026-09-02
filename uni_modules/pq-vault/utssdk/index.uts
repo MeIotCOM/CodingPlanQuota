@@ -1,0 +1,18 @@
+// 平台分发：按目标平台挂载对应实现。
+// 各平台导出同构 API：
+//   secureReady(): boolean            安全区是否可用
+//   secureSet(k, v): boolean          写入（失败返回 false，由调用方回落）
+//   secureGet(k): string | null       读取
+//   secureRemove(k): boolean          删除
+
+// #ifdef APP-ANDROID
+export { secureReady, secureSet, secureGet, secureRemove } from './app-android'
+// #endif
+
+// #ifdef APP-IOS
+export { secureReady, secureSet, secureGet, secureRemove } from './app-ios'
+// #endif
+
+// #ifdef APP-HARMONY
+export { secureReady, secureSet, secureGet, secureRemove } from './app-harmony'
+// #endif

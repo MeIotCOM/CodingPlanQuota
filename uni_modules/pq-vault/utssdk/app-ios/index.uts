@@ -1,0 +1,19 @@
+// iOS 实现：TODO 接入 Keychain（Security.framework 的 SecItemAdd / SecItemCopyMatching / SecItemDelete）。
+// 当前版本回落：返回不可用，由 utils/vault.uts 统一降级为普通沙盒存储（设置页会如实显示）。
+
+export function secureReady() : boolean {
+	console.warn("pq-vault: iOS Keychain 尚未接入，当前使用普通沙盒存储")
+	return false
+}
+
+export function secureSet(_key : string, _value : string) : boolean {
+	return false
+}
+
+export function secureGet(_key : string) : string | null {
+	return null
+}
+
+export function secureRemove(_key : string) : boolean {
+	return false
+}

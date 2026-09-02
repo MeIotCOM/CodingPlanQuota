@@ -1,0 +1,88 @@
+// MiniMax 编程套餐额度查询 —— 规格见 docs/provider-api-spec.md 第 4 节。
+//
+// GET https://{api_domain}/v1/api/openplatform/coding_plan/remains
+// CN: api.minimaxi.com；EN: api.minimax.io（baseUrl 含 minimax.io 则走国际版）
+// ⚠️ 上游给的是「剩余百分比」，需反转为已用百分比。
+// ⚠️ model_remains 只取 model_name == "general"；周桶仅 current_weekly_status == 1 时展示。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, extractResetTime, makeTier, makeOk, makeFail, makeTransientFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+function parseMinimax(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		// 业务级错误：base_resp.status_code != 0
+		const baseResp = body.getJSON("base_resp")
+		if (baseResp != null) {
+			let statusCode = num(baseResp["status_code"])
+			if (statusCode == null) statusCode = -1
+			if (statusCode != 0) {
+				let msg : string = t("err.unknown")
+				const rawMsg = baseResp["status_msg"]
+				if (rawMsg != null && typeof rawMsg == "string") msg = rawMsg as string
+				return makeFail(t("err.minimaxCode") + statusCode + t("err.httpJoin") + msg, false)
+			}
+		}
+
+		const modelRemains = body.getArray("model_remains")
+		if (modelRemains == null) return makeFail(t("err.noTiers"), false)
+
+		// 只取 general（编程套餐），跳过 video 等其他模型
+		let general : UTSJSONObject | null = null
+		for (let itemAny of modelRemains) {
+			const item = itemAny as UTSJSONObject
+			const name = item["model_name"]
+			if (name != null && typeof name == "string" && (name as string) == "general") {
+				general = item
+				break
+			}
+		}
+		if (general == null) return makeFail(t("err.noGeneral"), false)
+
+		const tiers : QuotaTier[] = []
+
+		// 5h 桶：剩余百分比 → 已用百分比
+		const remain5h = num(general["current_interval_remaining_percent"])
+		if (remain5h != null) {
+			const resetsAt = extractResetTime(general["end_time"])
+			tiers.push(makeTier("five_hour", 100.0 - remain5h, resetsAt, null, null))
+		}
+
+		// 周桶：仅 status == 1 时激活（status=3 表示套餐无周限额，不得展示）
+		const weeklyStatus = num(general["current_weekly_status"])
+		if (weeklyStatus != null && weeklyStatus == 1) {
+			const remainW = num(general["current_weekly_remaining_percent"])
+			if (remainW != null) {
+				const resetsAt = extractResetTime(general["weekly_end_time"])
+				tiers.push(makeTier("weekly_limit", 100.0 - remainW, resetsAt, null, null))
+			}
+		}
+
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+		return makeOk(tiers, null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+/** baseUrl 含 minimax.io → 国际版域名；否则国内版。registry 用它拼内置默认端点 */
+export function minimaxDomain(baseUrl : string) : string {
+	return baseUrl.toLowerCase().includes("minimax.io") ? "api.minimax.io" : "api.minimaxi.com"
+}
+
+export function fetchMinimax(url : string, apiKey : string) : Promise<QuotaResult> {
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + apiKey,
+		"Content-Type" : "application/json"
+	}
+	return getJson(url, header)
+		.then((res : HttpResponse) : QuotaResult => parseMinimax(res))
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}

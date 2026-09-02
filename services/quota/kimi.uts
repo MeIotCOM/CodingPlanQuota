@@ -1,0 +1,71 @@
+// Kimi For Coding 额度查询 —— 规格见 docs/provider-api-spec.md 第 2 节。
+//
+// GET https://api.kimi.com/coding/v1/usages
+// limits[] → five_hour（limit/remaining 为配额点数，相除得百分比）
+// usage    → weekly_limit
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, extractResetTime, makeTier, makeOk, makeFail, makeTransientFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+function parseKimi(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		const tiers : QuotaTier[] = []
+
+		// 5 小时窗口
+		const limits = body.getArray("limits")
+		if (limits != null) {
+			for (let itemAny of limits) {
+				const item = itemAny as UTSJSONObject
+				const detail = item.getJSON("detail")
+				if (detail == null) continue
+
+				let limit = num(detail["limit"])
+				if (limit == null) limit = 1.0
+				let remaining = num(detail["remaining"])
+				if (remaining == null) remaining = 0.0
+
+				const used = Math.max(limit - remaining, 0.0)
+				const utilization = limit > 0.0 ? used / limit * 100.0 : 0.0
+				const resetsAt = extractResetTime(detail["resetTime"])
+				tiers.push(makeTier("five_hour", utilization, resetsAt, null, null))
+			}
+		}
+
+		// 周限额
+		const usage = body.getJSON("usage")
+		if (usage != null) {
+			let limit = num(usage["limit"])
+			if (limit == null) limit = 1.0
+			let remaining = num(usage["remaining"])
+			if (remaining == null) remaining = 0.0
+
+			const used = Math.max(limit - remaining, 0.0)
+			const utilization = limit > 0.0 ? used / limit * 100.0 : 0.0
+			const resetsAt = extractResetTime(usage["resetTime"])
+			tiers.push(makeTier("weekly_limit", utilization, resetsAt, null, null))
+		}
+
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+		return makeOk(tiers, null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchKimi(url : string, apiKey : string) : Promise<QuotaResult> {
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + apiKey,
+		"Accept" : "application/json"
+	}
+	return getJson(url, header)
+		.then((res : HttpResponse) : QuotaResult => parseKimi(res))
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}

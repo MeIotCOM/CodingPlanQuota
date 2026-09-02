@@ -1,0 +1,66 @@
+// 火山签名所需的最小加密面：HMAC-SHA256（bytes）+ SHA-256（hex）。
+// Android 走 javax.crypto / java.security（桥接模式已被 pq-vault 验证）；
+// 其他平台暂未实装——返回空，火山模块据此给出明确的平台暂不支持错误。
+
+// #ifdef APP-ANDROID
+import Mac from "javax.crypto.Mac"
+import MessageDigest from "java.security.MessageDigest"
+// #endif
+
+export function hmacSha256(keyBytes : ByteArray, dataBytes : ByteArray) : ByteArray {
+	// #ifdef APP-ANDROID
+	const mac = Mac.getInstance("HmacSHA256")
+	mac.init(new javax.crypto.spec.SecretKeySpec(keyBytes, "HmacSHA256"))
+	return mac.doFinal(dataBytes)
+	// #endif
+	// #ifndef APP-ANDROID
+	return new Uint8Array(0)
+	// #endif
+}
+
+export function sha256Hex(dataBytes : ByteArray) : string {
+	// #ifdef APP-ANDROID
+	const digest = MessageDigest.getInstance("SHA-256").digest(dataBytes)
+	let out = ""
+	for (let b of digest) {
+		const v = b.toInt() & 0xFF
+		out += v < 16 ? "0" + v.toString(16) : v.toString(16)
+	}
+	return out
+	// #endif
+	// #ifndef APP-ANDROID
+	return ""
+	// #endif
+}
+
+export function utf8Bytes(s : string) : ByteArray {
+	// #ifdef APP-ANDROID
+	return s.encodeToByteArray()
+	// #endif
+	// #ifndef APP-ANDROID
+	return new Uint8Array(0)
+	// #endif
+}
+
+/** 字节数组拼接（内部全平台类型，不跨 UTS 边界） */
+export function concatBytes(a : ByteArray, b : ByteArray) : ByteArray {
+	// #ifdef APP-ANDROID
+	const baos = new ByteArrayOutputStream()
+	baos.write(a)
+	baos.write(b)
+	return baos.toByteArray()
+	// #endif
+	// #ifndef APP-ANDROID
+	return new Uint8Array(0)
+	// #endif
+}
+
+/** 平台加密是否可用 */
+export function cryptoReady() : boolean {
+	// #ifdef APP-ANDROID
+	return true
+	// #endif
+	// #ifndef APP-ANDROID
+	return false
+	// #endif
+}

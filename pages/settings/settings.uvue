@@ -1,0 +1,437 @@
+<template>
+	<scroll-view class="page" direction="vertical" show-scrollbar="false">
+		<view class="wrap">
+			<!-- ── 查询行为 ── -->
+			<text class="section-title">{{ behaviorTitle() }}</text>
+			<view class="row">
+				<text class="row-label">{{ autoRefreshLabel() }}</text>
+				<text :class="'switch-text ' + (settings.autoRefreshOnShow ? 'switch-on' : 'switch-off')" @click="toggleAuto()">{{ settings.autoRefreshOnShow ? onLabel() : offLabel() }}</text>
+			</view>
+			<text class="section-title">{{ intervalTitle() }}</text>
+			<view class="chips">
+				<view v-for="(opt, index) in intervalLabels" :key="opt"
+					:class="'chip ' + (intervalIndex == index ? 'chip-active' : '')"
+					@click="setIntervalSel(index)">
+					<text :class="'chip-text ' + (intervalIndex == index ? 'chip-text-active' : '')">{{ opt }}</text>
+				</view>
+			</view>
+			<text class="section-note">{{ intervalNoteText() }}</text>
+
+			<!-- ── 语言 ── -->
+			<text class="section-block">{{ langTitle() }}</text>
+			<view class="row" @click="chooseLang">
+				<text class="row-label">{{ langCurrentLabel() }}</text>
+				<text class="row-value link">{{ viewLabel() }}</text>
+			</view>
+
+			<!-- ── 配置备份 ── -->
+			<text class="section-block">{{ backupTitle() }}</text>
+			<button class="backup-btn" @click="genExport">{{ exportLabel() }}</button>
+			<view v-if="exportText.length > 0">
+				<textarea class="area" :value="exportText" disabled="true" maxlength="-1" />
+				<button class="backup-btn" type="primary" @click="copyExport">{{ copyLabel() }}</button>
+				<text class="section-note warn">{{ plainWarnText() }}</text>
+			</view>
+
+			<text class="section-title">{{ importTitle() }}</text>
+			<textarea class="area" v-model="importText" :placeholder="importPh()" maxlength="-1" />
+			<button class="backup-btn" @click="doImport">{{ importBtnLabel() }}</button>
+			<text class="section-note">{{ importNoteText() }}</text>
+
+			<!-- ── 数据管理 ── -->
+			<text class="section-block">{{ dataTitle() }}</text>
+			<button class="danger-btn" @click="clearAll">{{ clearAllLabel() }}</button>
+			<text class="section-note">{{ clearNoteText() }}</text>
+
+			<!-- ── 关于 ── -->
+			<text class="section-block">{{ aboutTitle() }}</text>
+			<view class="row">
+				<text class="row-label">{{ versionLabel() }}</text>
+				<text class="row-value">{{ appVersion }}</text>
+			</view>
+			<view class="row">
+				<text class="row-label">{{ teamLabel() }}</text>
+				<text class="row-value">{{ teamNameText() }}</text>
+			</view>
+			<view class="row">
+				<text class="row-label">{{ secLabel() }}</text>
+				<text :class="'row-value ' + (vaultOk() ? 'sec-ok' : 'sec-warn')">{{ secValue() }}</text>
+			</view>
+			<view class="row" @click="openAgreement">
+				<text class="row-label">{{ agreementLabel() }}</text>
+				<text class="row-value link">{{ viewLabel() }}</text>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+import { ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
+import { loadSettings, saveSettings, defaultSettings, AppSettings } from '../../services/settings'
+import { exportConfigJson, importConfigJson, ImportResult, loadProviders, deleteAllProviders } from '../../services/registry'
+import { clearLastQuota } from '../../services/lastquota'
+import { vaultAvailable } from '../../utils/vault'
+import { t, getLangPref, setLangPref, LANG_AUTO, LANG_ZH, LANG_EN, LANG_DE, LANG_FR, LANG_JA, LANG_KO, LANG_RU } from '../../utils/i18n'
+
+const appVersion = "0.4.0"
+
+const INTERVALS : number[] = [0, 5, 15, 30, 60]
+const intervalLabels : string[] = [t("set.interval.off"), t("set.interval.5"), t("set.interval.15"), t("set.interval.30"), t("set.interval.60")]
+
+const LANG_VALUES : string[] = [LANG_AUTO, LANG_ZH, LANG_EN, LANG_DE, LANG_FR, LANG_JA, LANG_KO, LANG_RU]
+const langLabels : string[] = [t("set.langAuto"), "中文", "English", "Deutsch", "Français", "日本語", "한국어", "Русский"]
+
+const settings = ref<AppSettings>(defaultSettings())
+const intervalIndex = ref(0)
+const langIndex = ref(0)
+const exportText = ref("")
+const importText = ref("")
+
+// ── 模板文案包装（经 i18n；模板不能直调 import 的函数） ──
+function behaviorTitle() : string {
+	return t("set.behavior")
+}
+function autoRefreshLabel() : string {
+	return t("set.autoRefresh")
+}
+function onLabel() : string {
+	return t("set.on")
+}
+function offLabel() : string {
+	return t("set.off")
+}
+function intervalTitle() : string {
+	return t("set.interval")
+}
+function intervalNoteText() : string {
+	return t("set.intervalNote")
+}
+function langTitle() : string {
+	return t("set.lang")
+}
+function backupTitle() : string {
+	return t("set.backup")
+}
+function exportLabel() : string {
+	return t("set.export")
+}
+function copyLabel() : string {
+	return t("set.copy")
+}
+function plainWarnText() : string {
+	return t("set.plainWarn")
+}
+function importTitle() : string {
+	return t("set.importTitle")
+}
+function importPh() : string {
+	return t("set.importPh")
+}
+function importBtnLabel() : string {
+	return t("set.importBtn")
+}
+function importNoteText() : string {
+	return t("set.importNote")
+}
+function dataTitle() : string {
+	return t("set.data")
+}
+function clearAllLabel() : string {
+	return t("set.clearAll")
+}
+function clearNoteText() : string {
+	return t("set.clearNote")
+}
+function aboutTitle() : string {
+	return t("set.about")
+}
+function versionLabel() : string {
+	return t("set.version")
+}
+function teamLabel() : string {
+	return t("set.team")
+}
+function teamNameText() : string {
+	return t("set.teamName")
+}
+function agreementLabel() : string {
+	return t("set.agreement")
+}
+function viewLabel() : string {
+	return t("set.view")
+}
+// ── 密钥存储状态（关于区展示，如实反映，不静默伪装） ──
+function secLabel() : string {
+	return t("sec.storage")
+}
+function vaultOk() : boolean {
+	return vaultAvailable()
+}
+function secValue() : string {
+	return vaultAvailable() ? t("sec.keystore") : t("sec.plain")
+}
+
+function refreshFromStorage() {
+	settings.value = loadSettings()
+	let idx = 0
+	for (let i = 0; i < INTERVALS.length; i++) {
+		if (INTERVALS[i] == settings.value.pollIntervalMin) {
+			idx = i
+			break
+		}
+	}
+	intervalIndex.value = idx
+}
+
+function persist() {
+	const s : AppSettings = {
+		autoRefreshOnShow : settings.value.autoRefreshOnShow,
+		pollIntervalMin : INTERVALS[intervalIndex.value]
+	}
+	saveSettings(s)
+}
+
+function toggleAuto() {
+	settings.value.autoRefreshOnShow = !settings.value.autoRefreshOnShow
+	persist()
+}
+
+function setIntervalSel(index : number) {
+	intervalIndex.value = index
+	persist()
+}
+
+// ── 配置备份 ──
+function genExport() {
+	exportText.value = exportConfigJson()
+}
+
+function copyExport() {
+	uni.setClipboardData({
+		data : exportText.value,
+		success : () => {
+			uni.showToast({ title : t("set.copied"), icon : "none" })
+		}
+	})
+}
+
+function doImport() {
+	if (importText.value.trim().length == 0) {
+		uni.showToast({ title : t("set.pasteFirst"), icon : "none" })
+		return
+	}
+	const r : ImportResult = importConfigJson(importText.value.trim())
+	if (!r.ok) {
+		uni.showToast({ title : t("set.badBackup"), icon : "none" })
+		return
+	}
+	importText.value = ""
+	let msg = t("set.importDone") + " " + t("set.importAdded") + r.added + t("set.importUpdated") + r.updated
+	if (r.invalid > 0) msg = msg + t("set.importInvalid") + r.invalid
+	uni.showToast({ title : msg, icon : "none" })
+}
+
+// ── 语言 ──
+// 用动作菜单而非 chips：语言列表未来会到 8-9 种（中英德法日韩俄），菜单可扩展且布局零改动。
+// ⚠️ 嵌套回调内不能引用顶层本地函数，切换逻辑内联在 success 回调里。
+function chooseLang() {
+	uni.showActionSheet({
+		itemList : langLabels,
+		success : (res) => {
+			const idx = res.tapIndex
+			if (idx < 0 || idx >= LANG_VALUES.length) return
+			if (idx == langIndex.value) return
+			setLangPref(LANG_VALUES[idx])
+			uni.showToast({ title : t("set.langChanged"), icon : "none" })
+			// 语言切换后整树文案都要换，重载到首页最干净
+			setTimeout(() => {
+				uni.reLaunch({ url : "/pages/index/index" })
+			}, 600)
+		}
+	})
+}
+function langCurrentLabel() : string {
+	return langLabels[langIndex.value]
+}
+
+// ── 数据管理 ──
+// ⚠️ uni-app x 限制：嵌套回调内不能引用 script 顶层本地函数（编译报「找不到名称」），
+// 故二次确认的执行体直接内联在回调里，不抽 doClearAll()。
+function clearAll() {
+	uni.showModal({
+		title : t("set.clearTitle"),
+		content : t("set.clearMsg1"),
+		success : (res) => {
+			if (res.confirm) {
+				// 双重确认：再问一次
+				uni.showModal({
+					title : t("set.clearTitle2"),
+					content : t("set.clearMsg2"),
+					success : (res2) => {
+						if (res2.confirm) {
+							const list = loadProviders()
+							for (let p of list) {
+								clearLastQuota(p.id)
+							}
+							deleteAllProviders()
+							const d = defaultSettings()
+							saveSettings(d)
+							settings.value = d
+							intervalIndex.value = 0
+							exportText.value = ""
+							importText.value = ""
+							uni.showToast({ title : t("set.cleared"), icon : "none" })
+						}
+					}
+				})
+			}
+		}
+	})
+}
+
+// ── 关于 ──
+function openAgreement() {
+	uni.navigateTo({ url : "/pages/agreement/agreement" })
+}
+
+onShow(() => {
+	uni.setNavigationBarTitle({ title : t("nav.settings") })
+	refreshFromStorage()
+	let li = 0
+	const pref = getLangPref()
+	for (let i = 0; i < LANG_VALUES.length; i++) {
+		if (LANG_VALUES[i] == pref) {
+			li = i
+			break
+		}
+	}
+	langIndex.value = li
+})
+</script>
+
+<style>
+.page {
+	flex : 1;
+	background-color : #f2f4f8;
+}
+.wrap {
+	padding : 24rpx 32rpx 80rpx 32rpx;
+}
+
+.section-title {
+	font-size : 26rpx;
+	color : #475569;
+	margin-top : 36rpx;
+	margin-bottom : 16rpx;
+}
+/* 大分区标题（带分隔感） */
+.section-block {
+	font-size : 30rpx;
+	font-weight : bold;
+	color : #1e293b;
+	margin-top : 56rpx;
+	margin-bottom : 8rpx;
+}
+.section-note {
+	font-size : 22rpx;
+	color : #94a3b8;
+	margin-top : 12rpx;
+	line-height : 34rpx;
+}
+.warn {
+	color : #d97706;
+}
+
+/* 行 */
+.row {
+	flex-direction : row;
+	justify-content : space-between;
+	align-items : center;
+	background-color : #ffffff;
+	border-radius : 16rpx;
+	padding : 24rpx;
+	margin-top : 16rpx;
+}
+.row-label {
+	font-size : 28rpx;
+	color : #0f172a;
+}
+.row-value {
+	font-size : 26rpx;
+	color : #64748b;
+}
+.link {
+	color : #4338ca;
+}
+.sec-ok {
+	color : #16a34a;
+}
+.sec-warn {
+	color : #d97706;
+}
+
+/* 开关文字 */
+.switch-text {
+	font-size : 28rpx;
+	font-weight : bold;
+	padding : 8rpx 28rpx;
+	border-radius : 24rpx;
+}
+.switch-on {
+	color : #ffffff;
+	background-color : #16a34a;
+}
+.switch-off {
+	color : #64748b;
+	background-color : #e2e8f0;
+}
+
+.chips {
+	flex-direction : row;
+	flex-wrap : wrap;
+}
+.chip {
+	background-color : #ffffff;
+	border-radius : 32rpx;
+	padding : 14rpx 28rpx;
+	margin-right : 16rpx;
+	margin-bottom : 16rpx;
+}
+.chip-active {
+	background-color : #4338ca;
+}
+.chip-text {
+	font-size : 26rpx;
+	color : #334155;
+}
+.chip-text-active {
+	color : #ffffff;
+}
+
+/* 备份区 */
+.backup-btn {
+	margin-top : 20rpx;
+	margin-bottom : 16rpx;
+	font-size : 28rpx;
+	border-radius : 16rpx;
+}
+.area {
+	width : 640rpx;
+	height : 280rpx;
+	background-color : #ffffff;
+	border-radius : 16rpx;
+	padding : 20rpx 24rpx;
+	font-size : 24rpx;
+	color : #0f172a;
+}
+
+/* 危险操作 */
+.danger-btn {
+	margin-top : 20rpx;
+	font-size : 28rpx;
+	border-radius : 16rpx;
+	background-color : #fee2e2;
+	color : #dc2626;
+}
+</style>

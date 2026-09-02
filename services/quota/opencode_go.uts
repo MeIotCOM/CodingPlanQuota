@@ -1,0 +1,62 @@
+// OpenCode Go 额度查询 —— 规格见 docs/provider-api-spec.md 第 6 节。
+//
+// GET https://opencode.ai/zen/go/v1/usage（第一方但未文档化的路由，需防御形态变化）
+// ⚠️ 用量端点只认 Authorization: Bearer（与推理侧只认 x-api-key 正好相反）。
+// rolling → five_hour，weekly → weekly_limit，monthly → monthly。
+// 403 = Key 有效但无 Go 订阅（与 401 的 Key 无效分开提示）。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, extractResetTime, makeTier, makeOk, makeFail, makeTransientFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+function windowToTier(usage : UTSJSONObject, key : string, tierName : string) : QuotaTier | null {
+	const window = usage.getJSON(key)
+	if (window == null) return null
+	const percent = num(window["percent"])
+	if (percent == null) return null
+	// percent == 0 时上游 resetsAt 是「now+窗口时长」的占位值，丢弃不展示倒计时
+	const resetsAt = percent > 0.0 ? extractResetTime(window["resetsAt"]) : null
+	return makeTier(tierName, percent, resetsAt, null, null)
+}
+
+function parseOpencodeGo(res : HttpResponse) : QuotaResult {
+	if (res.statusCode == 403) {
+		// Key 本身有效（Zen 与 Go 共用 workspace key），但该 workspace 没有 Go 订阅
+		return makeFail(t("err.ogNoSub"), false)
+	}
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		const usage = body.getJSON("usage")
+		if (usage == null) return makeFail(t("err.noUsage"), false)
+
+		const tiers : QuotaTier[] = []
+		const rolling = windowToTier(usage, "rolling", "five_hour")
+		if (rolling != null) tiers.push(rolling)
+		const weekly = windowToTier(usage, "weekly", "weekly_limit")
+		if (weekly != null) tiers.push(weekly)
+		const monthly = windowToTier(usage, "monthly", "monthly")
+		if (monthly != null) tiers.push(monthly)
+
+		// 三窗口一个都没解析出来 = 响应形态不认识（未文档化端点可能再次变形）
+		if (tiers.length == 0) return makeFail(t("err.shapeUnknown"), false)
+		return makeOk(tiers, null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchOpencodeGo(url : string, apiKey : string) : Promise<QuotaResult> {
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + apiKey,
+		"Accept" : "application/json"
+	}
+	return getJson(url, header)
+		.then((res : HttpResponse) : QuotaResult => parseOpencodeGo(res))
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}

@@ -1,0 +1,35 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "CodingPlanQuota",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/provider/edit",
+      "style": {
+        "navigationBarTitleText": "供应商配置"
+      }
+    },
+    {
+      "path": "pages/settings/settings",
+      "style": {
+        "navigationBarTitleText": "设置"
+      }
+    },
+    {
+      "path": "pages/agreement/agreement",
+      "style": {
+        "navigationBarTitleText": "用户使用协议"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTitleText": "CodingPlanQuota",
+    "navigationBarBackgroundColor": "#4338ca",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f2f4f8"
+  }
+}

@@ -1,0 +1,81 @@
+// UI 展示辅助：窗口名、进度条百分比、重置倒计时、美元金额、相对时间。
+// 全部文案经 utils/i18n 取值。
+
+import { t } from './i18n'
+
+export function tierDisplayName(name : string) : string {
+	if (name == "five_hour") return t("tier.five_hour")
+	if (name == "weekly_limit") return t("tier.weekly_limit")
+	if (name == "monthly") return t("tier.monthly")
+	return name
+}
+
+/** 进度条宽度百分比，夹在 0-100 */
+export function clampPct(n : number) : number {
+	if (n < 0) return 0
+	if (n > 100) return 100
+	return n
+}
+
+/** ISO 时间 → "x 天 x 小时" / "x 小时 x 分"；无法解析返回 "—" */
+export function formatRemaining(iso : string | null) : string {
+	if (iso == null) return t("time.invalid")
+	try {
+		const date = new Date(iso)
+		const time = date.getTime()
+		if (isNaN(time)) return t("time.invalid")
+		const diff = time - Date.now()
+		if (diff <= 0) return t("time.reset")
+		const hours = Math.floor(diff / 3600000)
+		const mins = Math.floor((diff % 3600000) / 60000)
+		if (hours >= 24) {
+			const days = Math.floor(hours / 24)
+			return days + t("time.dayUnit") + (hours % 24) + t("time.hourUnit")
+		}
+		return hours + t("time.hourUnit") + mins + t("time.minUnit")
+	} catch (e) {
+		return t("time.invalid")
+	}
+}
+
+export function formatUsd(v : number | null) : string {
+	if (v == null) return ""
+	return "$" + v.toFixed(2)
+}
+
+export function formatQueriedAt(ms : number) : string {
+	if (ms <= 0) return t("time.never")
+	try {
+		const d = new Date(ms)
+		const h = d.getHours()
+		const m = d.getMinutes()
+		const hh = h < 10 ? "0" + h : "" + h
+		const mm = m < 10 ? "0" + m : "" + m
+		return t("time.updated") + " " + hh + ":" + mm
+	} catch (e) {
+		return ""
+	}
+}
+
+/** 模板取值："vor {n} Min." + 5 → "vor 5 Min."（无 {n} 占位时原样返回数字前缀） */
+function tpl(key : string, n : number) : string {
+	const parts = t(key).split("{n}")
+	if (parts.length == 2) {
+		return parts[0] + n + parts[1]
+	}
+	return "" + n + t(key)
+}
+
+/** 相对时间：刚刚 / x 分钟前 / x 小时前 / x 天前；无效返回 "—" */
+export function formatRelative(ms : number) : string {
+	if (ms <= 0) return t("time.invalid")
+	try {
+		const diff = Date.now() - ms
+		if (diff < 60000) return t("time.justNow")
+		if (diff < 3600000) return tpl("time.minAgoTpl", Math.floor(diff / 60000))
+		if (diff < 86400000) return tpl("time.hourAgoTpl", Math.floor(diff / 3600000))
+		return tpl("time.dayAgoTpl", Math.floor(diff / 86400000))
+	} catch (e) {
+		return t("time.invalid")
+	}
+}

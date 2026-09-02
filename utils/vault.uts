@@ -1,0 +1,53 @@
+// 安全存储包装层：优先走 pq-vault 插件（Android Keystore 加密）；
+// 插件不可用（iOS/鸿蒙待接入，或初始化失败）时回落普通沙盒存储——
+// 可用状态如实暴露给设置页展示，绝不静默伪装。
+// 首次调用做一次读写往返探测（canary），结果进程内缓存。
+
+import { secureSet, secureGet, secureRemove, secureReady } from '../uni_modules/pq-vault'
+
+let cachedAvailable = -1
+
+/** 安全区是否真实可用（首次调用探测，之后走缓存） */
+export function vaultAvailable() : boolean {
+	if (cachedAvailable < 0) {
+		let ok = secureReady()
+		if (ok) {
+			const canary = "pq_canary"
+			const probe = "ok-" + Date.now()
+			secureSet(canary, probe)
+			const back = secureGet(canary)
+			ok = (back != null && (back as string) == probe)
+			secureRemove(canary)
+		}
+		cachedAvailable = ok ? 1 : 0
+	}
+	return cachedAvailable == 1
+}
+
+/** 写入：安全区可用走加密；否则明文落沙盒（plain_ 前缀隔离） */
+export function vaultWrite(key : string, value : string) : boolean {
+	if (vaultAvailable()) {
+		if (secureSet(key, value)) return true
+	}
+	uni.setStorageSync("plain_" + key, value)
+	return true
+}
+
+/** 读取：先加密区，后明文回落区 */
+export function vaultRead(key : string) : string | null {
+	if (vaultAvailable()) {
+		const v = secureGet(key)
+		if (v != null) return v
+	}
+	const p = uni.getStorageSync("plain_" + key)
+	if (p == null) return null
+	if (typeof p != "string") return null
+	const s = p as string
+	return s.length > 0 ? s : null
+}
+
+/** 删除：两个区都清 */
+export function vaultDelete(key : string) {
+	secureRemove(key)
+	uni.removeStorageSync("plain_" + key)
+}

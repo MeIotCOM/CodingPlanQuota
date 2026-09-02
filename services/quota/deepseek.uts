@@ -1,0 +1,55 @@
+// DeepSeek 开放平台余额查询 —— GET /user/balance（官方文档接口，Bearer Key）。
+// DeepSeek 是按量计费，无时间窗口额度；以 balanceText 形式展示账户余额。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult } from '../../utils/types'
+import { num, str, makeOk, makeFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+function currencySymbol(currency : string) : string {
+	if (currency == "CNY") return "¥"
+	if (currency == "USD") return "$"
+	return currency + " "
+}
+
+function parseDeepseek(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		const infos = body.getArray("balance_infos")
+		if (infos == null || infos.length == 0) {
+			return makeFail(t("err.noBalance"), false)
+		}
+		const first = infos[0] as UTSJSONObject
+		let currency = str(first["currency"])
+		if (currency == null) currency = "CNY"
+		let total = num(first["total_balance"])
+		const totalVal = total == null ? 0.0 : (total as number)
+		let granted = num(first["granted_balance"])
+		const grantedVal = granted == null ? 0.0 : (granted as number)
+
+		let text = t("bal.label") + " " + currencySymbol(currency as string) + totalVal.toFixed(2)
+		if (grantedVal > 0.0) {
+			text = text + t("bal.grantedIncl") + currencySymbol(currency as string) + grantedVal.toFixed(2)
+		}
+		const r = makeOk([], null)
+		r.balanceText = text
+		return r
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchDeepseek(apiKey : string) : Promise<QuotaResult> {
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + apiKey,
+		"Accept" : "application/json"
+	}
+	return getJson("https://api.deepseek.com/user/balance", header)
+		.then((res : HttpResponse) : QuotaResult => parseDeepseek(res))
+		.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+}

@@ -1,0 +1,41 @@
+{
+  "name": "CodingPlanQuota",
+  "appid": "__UNI__A79BD59",
+  "description": "Coding Plan / Agent Plan 套餐额度移动端查询（5 小时 / 周 / 月窗口）",
+  "versionName": "0.4.0",
+  "versionCode": 4,
+  "locale": "zh-Hans",
+  "uni-app-x": {
+    "styleIsolationVersion": "2"
+  },
+  "vueVersion": "3",
+  "uniStatistics": {
+    "enable": false
+  },
+  "app": {
+    "distribute": {}
+  },
+  "app-android": {
+    "distribute": {
+      "modules": {},
+      "icons": {
+        "hdpi": "icons/android/hdpi.png",
+        "xhdpi": "icons/android/xhdpi.png",
+        "xxhdpi": "icons/android/xxhdpi.png",
+        "xxxhdpi": "icons/android/xxxhdpi.png"
+      },
+      "splashScreens": {
+        "default": {}
+      }
+    }
+  },
+  "app-ios": {
+    "distribute": {
+      "modules": {},
+      "icons": {
+        "appstore": "icons/icon-1024.png"
+      },
+      "splashScreens": {}
+    }
+  }
+}

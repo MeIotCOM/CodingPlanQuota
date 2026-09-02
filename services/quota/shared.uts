@@ -1,0 +1,121 @@
+// 供应商解析共享工具：数值/时间戳兼容转换 + 结果构造器。
+// 语义对齐 cc-switch coding_plan.rs 的 parse_f64 / extract_reset_time。
+
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { t } from '../../utils/i18n'
+
+export function nowMillis() : number {
+	return Date.now()
+}
+
+/** 兼容 JSON 数字/字符串双形态（如 100 与 "100"） */
+export function num(v : any | null) : number | null {
+	if (v == null) return null
+	if (typeof v == "number") return v as number
+	if (typeof v == "string") {
+		const s = (v as string).trim()
+		if (s.length == 0) return null
+		const n = parseFloat(s)
+		if (isNaN(n)) return null
+		return n
+	}
+	return null
+}
+
+export function str(v : any | null) : string | null {
+	if (v == null) return null
+	if (typeof v == "string") return v as string
+	return null
+}
+
+function millisToIso(ms : number) : string | null {
+	try {
+		return new Date(ms).toISOString()
+	} catch (e) {
+		return null
+	}
+}
+
+/**
+ * 重置时间归一化（对齐 cc-switch extract_reset_time）：
+ * 字符串直接透传；数字自动区分秒（< 1e12）/毫秒（≥ 1e12）转 ISO；
+ * 0/负值（火山无活跃窗口回 -1 之类）视为无重置时间。
+ */
+export function extractResetTime(v : any | null) : string | null {
+	const s = str(v)
+	if (s != null) return s
+	if (v != null && typeof v == "number") {
+		const n = v as number
+		if (n <= 0) return null
+		const ms = n < 1000000000000 ? n * 1000 : n
+		return millisToIso(ms)
+	}
+	return null
+}
+
+export function makeTier(name : string, utilization : number, resetsAt : string | null,
+	usedUsd : number | null, maxUsd : number | null) : QuotaTier {
+	const t : QuotaTier = {
+		name : name,
+		utilization : utilization,
+		resetsAt : resetsAt,
+		usedValueUsd : usedUsd,
+		maxValueUsd : maxUsd
+	}
+	return t
+}
+
+export function makeOk(tiers : QuotaTier[], message : string | null) : QuotaResult {
+	const r : QuotaResult = {
+		success : true,
+		credentialExpired : false,
+		transient : false,
+		message : message,
+		balanceText : null,
+		error : null,
+		tiers : tiers,
+		queriedAt : nowMillis()
+	}
+	return r
+}
+
+export function makeFail(error : string, credentialExpired : boolean) : QuotaResult {
+	const r : QuotaResult = {
+		success : false,
+		credentialExpired : credentialExpired,
+		transient : false,
+		message : null,
+		balanceText : null,
+		error : error,
+		tiers : [],
+		queriedAt : nowMillis()
+	}
+	return r
+}
+
+/** 网络断连/超时等瞬时失败：UI 应保留上次成功数据，不覆盖缓存 */
+export function makeTransientFail(error : string) : QuotaResult {
+	const r : QuotaResult = {
+		success : false,
+		credentialExpired : false,
+		transient : true,
+		message : null,
+		balanceText : null,
+		error : error,
+		tiers : [],
+		queriedAt : nowMillis()
+	}
+	return r
+}
+
+/** 统一处理 HTTP 状态码前置判断（401/403 → Key 失效；非 2xx → 携带原文报错） */
+export function checkStatus(resStatusCode : number, resText : string) : QuotaResult | null {
+	if (resStatusCode == 401 || resStatusCode == 403) {
+		return makeFail(t("err.keyInvalidPrefix") + resStatusCode + t("err.keyInvalidSuffix"), true)
+	}
+	if (resStatusCode < 200 || resStatusCode >= 300) {
+		let msg = t("err.httpPrefix") + resStatusCode + t("err.httpJoin") + resText
+		return makeFail(msg, false)
+	}
+	return null
+}

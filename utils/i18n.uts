@@ -1,0 +1,513 @@
+// 轻量 i18n：集中字符串表 + 语言解析（跟随系统/手动切换）。
+// 设计约束：
+// - 不依赖框架 i18n（uni-app x 该域支持有限），页面文本统一经 t(key) 取值
+// - 语言表分布：中英在本文件；德法日韩俄在 utils/locale/*.uts
+// - 回退链：当前语言 → 英文 → 中文 → 键名
+// - 用户协议保留中英双份全文（agreement 页内嵌，不在此表）
+
+import { deTable } from './locale/de'
+import { frTable } from './locale/fr'
+import { jaTable } from './locale/ja'
+import { koTable } from './locale/ko'
+import { ruTable } from './locale/ru'
+
+export const LANG_AUTO = "auto"
+export const LANG_ZH = "zh-Hans"
+export const LANG_EN = "en-US"
+export const LANG_DE = "de"
+export const LANG_FR = "fr"
+export const LANG_JA = "ja"
+export const LANG_KO = "ko"
+export const LANG_RU = "ru"
+
+const PREF_KEY = "pq_lang_pref"
+
+let cachedLocale = ""
+
+const zhTable : UTSJSONObject = {
+	// 导航标题
+	"nav.home" : "CodingPlanQuota",
+	"nav.edit" : "供应商配置",
+	"nav.settings" : "设置",
+	"nav.agreement" : "用户使用协议",
+
+	// 首页
+	"home.topHint" : "套餐额度一览",
+	"home.settingsLink" : "设置",
+	"home.empty.title" : "还没有供应商",
+	"home.empty.desc" : "添加你的 Coding Plan / Agent Plan API Key，随时查看 5 小时、周、月额度消耗",
+	"home.empty.btn" : "添加第一个供应商",
+	"home.edit" : "编辑",
+	"home.offline" : "网络不可用，当前显示上次查询结果",
+	"home.checkKey" : "（请检查 API Key）",
+	"home.netRetry" : "网络错误，请重试",
+	"home.queryFailed" : "查询失败",
+	"home.lastFailed" : "上次查询失败",
+
+	// 窗口名
+	"tier.five_hour" : "5 小时窗口",
+	"tier.weekly_limit" : "本周额度",
+	"tier.monthly" : "本月额度",
+
+	// 时间
+	"time.never" : "未查询",
+	"time.justNow" : "刚刚",
+	"time.minAgoTpl" : "{n} 分钟前",
+	"time.hourAgoTpl" : "{n} 小时前",
+	"time.dayAgoTpl" : "{n} 天前",
+	"time.reset" : "已重置",
+	"time.dayUnit" : " 天 ",
+	"time.hourUnit" : " 小时",
+	"time.minUnit" : " 分",
+	"time.updated" : "更新于",
+	"time.invalid" : "—",
+
+	// 编辑页
+	"edit.kindTitle" : "供应商类型",
+	"edit.nameTitle" : "显示名称",
+	"edit.namePh" : "例如：智谱主力号",
+	"edit.keyTitle" : "API Key",
+	"edit.keyPh" : "粘贴供应商 API Key",
+	"edit.keyNote" : "Key 仅保存在本机，只用于向该供应商发起只读额度查询",
+	"edit.baseUrlOptional" : "Base URL（可选）",
+	"edit.baseUrlRequired" : "Base URL（必填）",
+	"edit.orgTitle" : "组织 ID（Organization ID）",
+	"edit.orgPh" : "bigmodel-organization 头的值",
+	"edit.projTitle" : "项目 ID（Project ID）",
+	"edit.projPh" : "bigmodel-project 头的值",
+	"edit.protocolTitle" : "解析协议",
+	"edit.w1" : "窗口一（对应「5 小时窗口」）",
+	"edit.w2" : "窗口二（对应「本周额度」，可整体留空）",
+	"edit.percentPh" : "已用百分比路径，如 usage.rolling.percent",
+	"edit.limitPh" : "上限路径（与剩余路径配合），如 limits.0.detail.limit",
+	"edit.remainingPh" : "剩余路径，如 limits.0.detail.remaining",
+	"edit.resetPh" : "重置时间路径（可空），如 limits.0.detail.resetTime",
+	"edit.percentPhShort" : "已用百分比路径",
+	"edit.limitPhShort" : "上限路径",
+	"edit.remainingPhShort" : "剩余路径",
+	"edit.resetPhShort" : "重置时间路径（可空）",
+	"edit.akTitle" : "访问密钥 ID（AccessKey ID）",
+	"edit.akPh" : "火山账号 AccessKey ID",
+	"edit.skTitle" : "私密访问密钥（Secret AccessKey）",
+	"edit.skPh" : "火山账号 Secret AccessKey",
+	"edit.toast.noAkSk" : "火山方舟需要 AccessKey ID 和 Secret",
+	"edit.pathsNote" : "JSON 路径用点分隔、数组用下标（如 data.limits.0.detail.percentage）。百分比路径与「上限+剩余」二选一，同时填写时百分比优先；路径取不到的窗口自动跳过。",
+	"edit.auth" : "鉴权方式",
+	"edit.authBearer" : "Bearer Token",
+	"edit.authRaw" : "Key 直传",
+	"edit.authNone" : "无鉴权头",
+	"edit.scaleTitle" : "百分比计数方式",
+	"edit.scale100" : "0–100 直接使用",
+	"edit.scale01" : "0–1 小数（自动 ×100）",
+	"edit.save" : "保存",
+	"edit.delete" : "删除此供应商",
+	"edit.delTitle" : "确认删除",
+	"edit.delConfirm" : "删除后需要重新录入 API Key 才能恢复",
+	"edit.toast.noName" : "请填写显示名称",
+	"edit.toast.noKey" : "请填写 API Key",
+	"edit.toast.noBaseUrl" : "该供应商必须填写 Base URL",
+	"edit.toast.badUrl" : "端点 URL 必须以 http(s):// 开头",
+	"edit.toast.team" : "该协议需要组织 ID 和项目 ID",
+	"edit.toast.w1" : "请至少为窗口一填写百分比路径，或上限+剩余路径",
+	"edit.toast.notSaved" : "尚未保存，无需删除",
+
+	// 供应商类型（label/note）
+	"kind.zhipu" : "智谱 GLM（个人版）",
+	"kind.zhipu.note" : "默认国内站 open.bigmodel.cn；若用国际站请在 Base URL 填 api.z.ai",
+	"kind.zhipu_team" : "智谱 GLM（团队版）",
+	"kind.zhipu_team.note" : "需要 API Key + 组织 ID + 项目 ID 三者齐全",
+	"kind.kimi" : "Kimi For Coding",
+	"kind.kimi.note" : "使用 Kimi Coding Plan 的 API Key",
+	"kind.minimax" : "MiniMax",
+	"kind.minimax.note" : "默认国内站；国际版请在 Base URL 填 api.minimax.io",
+	"kind.zenmux" : "ZenMux",
+	"kind.zenmux.note" : "Base URL 必须是完整的额度查询端点地址，从 ZenMux 控制台复制",
+	"kind.opencode_go" : "OpenCode Go",
+	"kind.opencode_go.note" : "$10/月订阅；额度端点使用与推理相同的 workspace API Key",
+	"kind.custom" : "自定义 / 中转站",
+	"kind.custom.note" : "选择一家协议兼容的供应商作为解析模板；仅支持只读 GET 查询端点",
+	"kind.volcengine" : "火山方舟 (Agent/Coding Plan)",
+	"kind.volcengine.note" : "需要火山账号访问密钥 AK/SK（非推理 API Key）；Base URL 仅用于推断 Region，可留空",
+	"kind.deepseek" : "DeepSeek",
+	"kind.deepseek.note" : "查询开放平台账户余额（使用 DeepSeek API Key）",
+
+	// 协议模板（label/hint）
+	"proto.zhipu" : "智谱协议",
+	"proto.zhipu.hint" : "端点形如 https://…/api/monitor/usage/quota/limit（Key 不带 Bearer）",
+	"proto.zhipu_team" : "智谱团队协议",
+	"proto.zhipu_team.hint" : "端点形如 https://…/api/monitor/usage/quota/limit?type=2（Key 不带 Bearer）",
+	"proto.kimi" : "Kimi 协议",
+	"proto.kimi.hint" : "端点形如 https://…/coding/v1/usages（Bearer Key）",
+	"proto.minimax" : "MiniMax 协议",
+	"proto.minimax.hint" : "端点形如 https://…/v1/api/openplatform/coding_plan/remains（Bearer Key）",
+	"proto.zenmux" : "ZenMux 协议",
+	"proto.zenmux.hint" : "端点即完整用量地址，响应含 quota_5_hour / quota_7_day（Bearer Key）",
+	"proto.opencode_go" : "OpenCode Go 协议",
+	"proto.opencode_go.hint" : "端点形如 https://…/zen/go/v1/usage（Bearer Key）",
+	"proto.custom_json" : "自定义 JSON 映射",
+	"proto.custom_json.hint" : "自声明端点鉴权与 JSON 取值路径，适配任意只读 GET 用量接口",
+
+	// 设置页
+	"set.behavior" : "查询行为",
+	"set.autoRefresh" : "打开 App 时自动刷新",
+	"set.on" : "开",
+	"set.off" : "关",
+	"set.interval" : "前台自动刷新间隔",
+	"set.interval.off" : "关闭",
+	"set.interval.5" : "5 分钟",
+	"set.interval.15" : "15 分钟",
+	"set.interval.30" : "30 分钟",
+	"set.interval.60" : "60 分钟",
+	"set.intervalNote" : "仅 App 在前台时轮询生效；后台刷新与超限推送提醒见路线图",
+	"set.backup" : "配置备份",
+	"set.export" : "生成导出内容",
+	"set.copy" : "复制到剪贴板",
+	"set.copied" : "已复制到剪贴板",
+	"set.plainWarn" : "⚠️ 导出内容为明文，包含全部 API Key，请勿发送到不可信的渠道",
+	"set.importTitle" : "从备份导入（按 ID 合并）",
+	"set.importPh" : "粘贴此前导出的备份内容",
+	"set.importBtn" : "导入",
+	"set.importNote" : "同 ID 的供应商会被备份内容覆盖，其余保留",
+	"set.pasteFirst" : "请先粘贴备份内容",
+	"set.badBackup" : "备份内容无法解析",
+	"set.importDone" : "导入完成：",
+	"set.importAdded" : "新增 ",
+	"set.importUpdated" : "，更新 ",
+	"set.importInvalid" : "，无效跳过 ",
+	"set.data" : "数据管理",
+	"set.clearAll" : "清除全部数据",
+	"set.clearNote" : "删除本机全部供应商凭据、查询缓存与设置，操作不可恢复",
+	"set.clearTitle" : "清除全部数据",
+	"set.clearMsg1" : "将删除全部供应商凭据、查询缓存与设置，且不可恢复。确认继续？",
+	"set.clearTitle2" : "再次确认",
+	"set.clearMsg2" : "确定要清除全部数据吗？此操作无法撤销。",
+	"set.cleared" : "已清除全部数据",
+	"set.about" : "关于",
+	"set.version" : "版本",
+	"set.team" : "维护团队",
+	"set.teamName" : "MelotCOM Team",
+	"set.agreement" : "用户使用协议",
+	"set.view" : "查看 ›",
+	"set.lang" : "语言 / Language",
+	"set.langAuto" : "跟随系统",
+	"set.langChanged" : "语言已切换",
+
+	// 错误（数据层）
+	"err.notJson" : "响应不是合法 JSON",
+	"err.noTiers" : "响应中没有可识别的额度数据",
+	"err.noData" : "响应缺少 data 字段",
+	"err.parseFail" : "响应解析失败",
+	"err.httpPrefix" : "API 错误（HTTP ",
+	"err.keyInvalidPrefix" : "API Key 无效或无权限（HTTP ",
+	"err.keyInvalidSuffix" : "）",
+	"err.httpJoin" : "）：",
+	"err.network" : "网络错误或超时，请重试",
+	"err.unknown" : "未知错误",
+	"err.apiPrefix" : "API 错误：",
+	"err.minimaxCode" : "API 错误（code ",
+	"err.noGeneral" : "响应中没有 general 模型的额度数据",
+	"err.noUsage" : "响应中没有 usage 字段",
+	"err.ogNoSub" : "API Key 有效，但该账户没有 OpenCode Go 订阅（HTTP 403）",
+	"err.shapeUnknown" : "响应形态无法识别（上游可能已改版）",
+	"err.customInvalid" : "自定义查询配置无效，请重新编辑该供应商",
+	"err.noQuotaPaths" : "没有解析到额度数据，请检查 JSON 路径",
+	"err.unknownKind" : "未知供应商类型：",
+	"err.unknownProto" : "未知协议：",
+	    "err.customNoUrl" : "自定义供应商必须配置端点 URL",
+
+	// 密钥存储状态
+	"sec.storage" : "密钥存储",
+	"sec.keystore" : "已加密（Android Keystore）",
+	"sec.plain" : "普通沙盒（本端安全区待接入）",
+	"err.noAkSk" : "火山方舟需要 AccessKey ID 和 Secret",
+	"err.authFail" : "鉴权失败",
+	"err.volcHint" : "请核对 AccessKey ID / Secret 是否正确，且账号具有方舟用量查询（OpenAPI）权限",
+	"err.volcNoSub" : "该凭据未找到有效的 Agent Plan 或 Coding Plan 订阅",
+	"err.volcNoSubRaw" : "未找到有效订阅（签名已通过）。原始响应：",
+	"err.platformUnsupported" : "当前平台暂不支持火山方舟查询",
+	"err.noBalance" : "响应中没有余额信息",
+	"bal.label" : "余额",
+	"bal.grantedIncl" : "（含赠送 "
+}
+
+const enTable : UTSJSONObject = {
+	"nav.home" : "CodingPlanQuota",
+	"nav.edit" : "Provider Settings",
+	"nav.settings" : "Settings",
+	"nav.agreement" : "User Agreement",
+
+	"home.topHint" : "Your plans",
+	"home.settingsLink" : "Settings",
+	"home.empty.title" : "No providers yet",
+	"home.empty.desc" : "Add your Coding Plan / Agent Plan API keys to check 5-hour, weekly and monthly usage anytime",
+	"home.empty.btn" : "Add your first provider",
+	"home.edit" : "Edit",
+	"home.offline" : "Offline — showing last query result",
+	"home.checkKey" : " (check your API key)",
+	"home.netRetry" : "Network error, please retry",
+	"home.queryFailed" : "Query failed",
+	"home.lastFailed" : "Last query failed",
+
+	"tier.five_hour" : "5-hour window",
+	"tier.weekly_limit" : "Weekly quota",
+	"tier.monthly" : "Monthly quota",
+
+	"time.never" : "Never queried",
+	"time.justNow" : "just now",
+	"time.minAgoTpl" : "{n} min ago",
+	"time.hourAgoTpl" : "{n} hr ago",
+	"time.dayAgoTpl" : "{n} days ago",
+	"time.reset" : "reset",
+	"time.dayUnit" : "d ",
+	"time.hourUnit" : "h ",
+	"time.minUnit" : "m",
+	"time.updated" : "Updated",
+	"time.invalid" : "—",
+
+	"edit.kindTitle" : "Provider type",
+	"edit.nameTitle" : "Display name",
+	"edit.namePh" : "e.g. Zhipu main",
+	"edit.keyTitle" : "API Key",
+	"edit.keyPh" : "Paste the provider API key",
+	"edit.keyNote" : "Stored on this device only; used solely for read-only quota queries",
+	"edit.baseUrlOptional" : "Base URL (optional)",
+	"edit.baseUrlRequired" : "Base URL (required)",
+	"edit.orgTitle" : "Organization ID",
+	"edit.orgPh" : "value of bigmodel-organization header",
+	"edit.projTitle" : "Project ID",
+	"edit.projPh" : "value of bigmodel-project header",
+	"edit.protocolTitle" : "Parsing protocol",
+	"edit.w1" : "Window 1 (maps to \"5-hour window\")",
+	"edit.w2" : "Window 2 (maps to \"Weekly quota\", may be blank)",
+	"edit.percentPh" : "used-percent path, e.g. usage.rolling.percent",
+	"edit.limitPh" : "limit path (with remaining), e.g. limits.0.detail.limit",
+	"edit.remainingPh" : "remaining path, e.g. limits.0.detail.remaining",
+	"edit.resetPh" : "reset-time path (optional), e.g. limits.0.detail.resetTime",
+	"edit.percentPhShort" : "used-percent path",
+	"edit.limitPhShort" : "limit path",
+	"edit.remainingPhShort" : "remaining path",
+	"edit.resetPhShort" : "reset-time path (optional)",
+	"edit.akTitle" : "AccessKey ID",
+	"edit.akPh" : "Volcengine AccessKey ID",
+	"edit.skTitle" : "Secret AccessKey",
+	"edit.skPh" : "Volcengine Secret AccessKey",
+	"edit.toast.noAkSk" : "Volcengine needs AccessKey ID and Secret",
+	"edit.pathsNote" : "Dot-separated JSON paths; arrays by index (e.g. data.limits.0.detail.percentage). Percent path OR limit+remaining — percent wins when both set. Windows that resolve to nothing are skipped.",
+	"edit.auth" : "Authentication",
+	"edit.authBearer" : "Bearer Token",
+	"edit.authRaw" : "Raw key",
+	"edit.authNone" : "No auth header",
+	"edit.scaleTitle" : "Percent scale",
+	"edit.scale100" : "0–100 as-is",
+	"edit.scale01" : "0–1 fraction (×100 auto)",
+	"edit.save" : "Save",
+	"edit.delete" : "Delete provider",
+	"edit.delTitle" : "Confirm deletion",
+	"edit.delConfirm" : "You will need to re-enter the API key to restore it",
+	"edit.toast.noName" : "Enter a display name",
+	"edit.toast.noKey" : "Enter the API key",
+	"edit.toast.noBaseUrl" : "This provider requires a Base URL",
+	"edit.toast.badUrl" : "Endpoint URL must start with http(s)://",
+	"edit.toast.team" : "This protocol needs organization & project IDs",
+	"edit.toast.w1" : "Fill a percent path (or limit+remaining) for Window 1",
+	"edit.toast.notSaved" : "Nothing saved yet",
+
+	"kind.zhipu" : "Zhipu GLM (Personal)",
+	"kind.zhipu.note" : "Defaults to open.bigmodel.cn; for the international site enter api.z.ai as Base URL",
+	"kind.zhipu_team" : "Zhipu GLM (Team)",
+	"kind.zhipu_team.note" : "Requires API key + organization ID + project ID",
+	"kind.kimi" : "Kimi For Coding",
+	"kind.kimi.note" : "Uses your Kimi Coding Plan API key",
+	"kind.minimax" : "MiniMax",
+	"kind.minimax.note" : "Defaults to CN; enter api.minimax.io as Base URL for international",
+	"kind.zenmux" : "ZenMux",
+	"kind.zenmux.note" : "Base URL must be the full quota endpoint copied from the ZenMux console",
+	"kind.opencode_go" : "OpenCode Go",
+	"kind.opencode_go.note" : "$10/mo plan; uses the same workspace API key as inference",
+	"kind.custom" : "Custom / Relay",
+	"kind.custom.note" : "Pick a compatible provider protocol as the parsing template; read-only GET endpoints only",
+	"kind.volcengine" : "Volcengine Ark (Agent/Coding Plan)",
+	"kind.volcengine.note" : "Requires the Volcengine account AccessKey ID / Secret (not the inference API key); Base URL only infers the Region and may be empty",
+	"kind.deepseek" : "DeepSeek",
+	"kind.deepseek.note" : "Shows your open-platform account balance (DeepSeek API key)",
+
+	"proto.zhipu" : "Zhipu protocol",
+	"proto.zhipu.hint" : "Endpoint like https://…/api/monitor/usage/quota/limit (raw key, no Bearer)",
+	"proto.zhipu_team" : "Zhipu Team protocol",
+	"proto.zhipu_team.hint" : "Endpoint like https://…/api/monitor/usage/quota/limit?type=2 (raw key, no Bearer)",
+	"proto.kimi" : "Kimi protocol",
+	"proto.kimi.hint" : "Endpoint like https://…/coding/v1/usages (Bearer key)",
+	"proto.minimax" : "MiniMax protocol",
+	"proto.minimax.hint" : "Endpoint like https://…/v1/api/openplatform/coding_plan/remains (Bearer key)",
+	"proto.zenmux" : "ZenMux protocol",
+	"proto.zenmux.hint" : "The endpoint is the full usage URL; response has quota_5_hour / quota_7_day (Bearer key)",
+	"proto.opencode_go" : "OpenCode Go protocol",
+	"proto.opencode_go.hint" : "Endpoint like https://…/zen/go/v1/usage (Bearer key)",
+	"proto.custom_json" : "Custom JSON mapping",
+	"proto.custom_json.hint" : "Declare endpoint auth and JSON paths yourself; fits any read-only GET usage API",
+
+	"set.behavior" : "Query behavior",
+	"set.autoRefresh" : "Auto-refresh on launch",
+	"set.on" : "On",
+	"set.off" : "Off",
+	"set.interval" : "Foreground auto-refresh interval",
+	"set.interval.off" : "Off",
+	"set.interval.5" : "5 min",
+	"set.interval.15" : "15 min",
+	"set.interval.30" : "30 min",
+	"set.interval.60" : "60 min",
+	"set.intervalNote" : "Foreground polling only; background refresh & alerts are on the roadmap",
+	"set.backup" : "Backup",
+	"set.export" : "Generate export",
+	"set.copy" : "Copy to clipboard",
+	"set.copied" : "Copied to clipboard",
+	"set.plainWarn" : "⚠️ Export is plaintext and contains all API keys — never send it to untrusted channels",
+	"set.importTitle" : "Import from backup (merged by ID)",
+	"set.importPh" : "Paste a previously exported backup",
+	"set.importBtn" : "Import",
+	"set.importNote" : "Same-ID providers are overwritten by the backup; others are kept",
+	"set.pasteFirst" : "Paste the backup first",
+	"set.badBackup" : "Backup cannot be parsed",
+	"set.importDone" : "Import done: ",
+	"set.importAdded" : "added ",
+	"set.importUpdated" : ", updated ",
+	"set.importInvalid" : ", invalid skipped ",
+	"set.data" : "Data",
+	"set.clearAll" : "Clear all data",
+	"set.clearNote" : "Deletes all provider credentials, query caches and settings on this device. Irreversible.",
+	"set.clearTitle" : "Clear all data",
+	"set.clearMsg1" : "This deletes all provider credentials, caches and settings. Continue?",
+	"set.clearTitle2" : "Confirm again",
+	"set.clearMsg2" : "Really clear all data? This cannot be undone.",
+	"set.cleared" : "All data cleared",
+	"set.about" : "About",
+	"set.version" : "Version",
+	"set.team" : "Maintained by",
+	"set.teamName" : "MelotCOM Team",
+	"set.agreement" : "User Agreement",
+	"set.view" : "View ›",
+	"set.lang" : "语言 / Language",
+	"set.langAuto" : "System",
+	"set.langChanged" : "Language changed",
+
+	"err.notJson" : "Response is not valid JSON",
+	"err.noTiers" : "No quota data recognized in response",
+	"err.noData" : "Response missing 'data' field",
+	"err.parseFail" : "Failed to parse response",
+	"err.httpPrefix" : "API error (HTTP ",
+	"err.keyInvalidPrefix" : "Invalid or unauthorized API key (HTTP ",
+	"err.keyInvalidSuffix" : ")",
+	"err.httpJoin" : "): ",
+	"err.network" : "Network error or timeout, please retry",
+	"err.unknown" : "Unknown error",
+	"err.apiPrefix" : "API error: ",
+	"err.minimaxCode" : "API error (code ",
+	"err.noGeneral" : "No 'general' model quota in response",
+	"err.noUsage" : "Response has no 'usage' field",
+	"err.ogNoSub" : "Key is valid but this account has no OpenCode Go subscription (HTTP 403)",
+	"err.shapeUnknown" : "Unrecognized response shape (upstream may have changed)",
+	"err.customInvalid" : "Invalid custom query config; please re-edit this provider",
+	"err.noQuotaPaths" : "No quota data parsed; check the JSON paths",
+	"err.unknownKind" : "Unknown provider kind: ",
+	"err.unknownProto" : "Unknown protocol: ",
+	    "err.customNoUrl" : "Custom provider requires an endpoint URL",
+
+	// Secure key storage status
+	"sec.storage" : "Secure key storage",
+	"sec.keystore" : "Encrypted (Android Keystore)",
+	"sec.plain" : "Plain sandbox (system keystore pending)",
+	"err.noAkSk" : "Volcengine requires AccessKey ID and Secret",
+	"err.authFail" : "Authentication failed",
+	"err.volcHint" : "Check the AccessKey ID / Secret and that the account has Ark usage-query (OpenAPI) permission",
+	"err.volcNoSub" : "No active Agent Plan or Coding Plan subscription found for this credential",
+	"err.volcNoSubRaw" : "No active subscription (signature OK). Raw: ",
+	"err.platformUnsupported" : "Volcengine query is not supported on this platform yet",
+	"err.noBalance" : "No balance info in response",
+	"bal.label" : "Balance",
+	"bal.grantedIncl" : " (incl. granted "
+}
+
+function loadPref() : string {
+	const raw = uni.getStorageSync(PREF_KEY)
+	if (raw == null) return LANG_AUTO
+	if (typeof raw != "string") return LANG_AUTO
+	const s = raw as string
+	if (s.length == 0) return LANG_AUTO
+	return s
+}
+
+function detectSystemLang() : string {
+	try {
+		const info = uni.getSystemInfoSync()
+		const lang = info.language
+		if (lang != null && (lang as string).length > 0) {
+			const l = (lang as string).toLowerCase()
+			if (l.startsWith("zh")) return LANG_ZH
+			if (l.startsWith("de")) return LANG_DE
+			if (l.startsWith("fr")) return LANG_FR
+			if (l.startsWith("ja")) return LANG_JA
+			if (l.startsWith("ko")) return LANG_KO
+			if (l.startsWith("ru")) return LANG_RU
+			if (l.startsWith("en")) return LANG_EN
+			// 其他语言：国际用户回落英文
+			return LANG_EN
+		}
+	} catch (e) {
+		// 检测失败回落中文
+	}
+	return LANG_ZH
+}
+
+/** 按语言取字符串表 */
+function tableFor(lang : string) : UTSJSONObject {
+	if (lang == LANG_EN) return enTable
+	if (lang == LANG_DE) return deTable
+	if (lang == LANG_FR) return frTable
+	if (lang == LANG_JA) return jaTable
+	if (lang == LANG_KO) return koTable
+	if (lang == LANG_RU) return ruTable
+	return zhTable
+}
+
+function resolveLocale(pref : string) : string {
+	if (pref == LANG_ZH) return LANG_ZH
+	if (pref == LANG_EN) return LANG_EN
+	if (pref == LANG_DE) return LANG_DE
+	if (pref == LANG_FR) return LANG_FR
+	if (pref == LANG_JA) return LANG_JA
+	if (pref == LANG_KO) return LANG_KO
+	if (pref == LANG_RU) return LANG_RU
+	return detectSystemLang() // 仅 LANG_AUTO 走系统检测
+}
+
+/** 当前生效语言（首次访问时解析并缓存） */
+export function getLang() : string {
+	if (cachedLocale == "") {
+		cachedLocale = resolveLocale(loadPref())
+	}
+	return cachedLocale
+}
+
+/** 语言偏好：auto / zh-Hans / en-US（切换后需重载页面生效） */
+export function setLangPref(pref : string) {
+	uni.setStorageSync(PREF_KEY, pref)
+	cachedLocale = resolveLocale(pref)
+}
+
+export function getLangPref() : string {
+	return loadPref()
+}
+
+/** 取字符串：当前语言 → 英文 → 中文 → 键名 */
+export function t(key : string) : string {
+	const lang = getLang()
+	if (lang != LANG_ZH) {
+		const v = tableFor(lang).getString(key)
+		if (v != null) return v
+		const e = enTable.getString(key)
+		if (e != null) return e
+	}
+	const z = zhTable.getString(key)
+	if (z != null) return z
+	return key
+}

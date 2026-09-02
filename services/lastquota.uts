@@ -1,0 +1,86 @@
+// 上次查询结果缓存：每个供应商独立 key。
+// 打开 App 先回填缓存（离线也能看到最后状态与时间戳），再按设置决定是否自动刷新。
+
+import { QuotaResult, QuotaTier } from '../utils/types'
+
+const KEY_PREFIX = "pq_last_quota_"
+
+export function saveLastQuota(providerId : string, q : QuotaResult) {
+	const tiers : Array<UTSJSONObject> = []
+	for (let t of q.tiers) {
+		const o : UTSJSONObject = {
+			"name" : t.name,
+			"utilization" : t.utilization,
+			"resetsAt" : t.resetsAt,
+			"usedValueUsd" : t.usedValueUsd,
+			"maxValueUsd" : t.maxValueUsd
+		}
+		tiers.push(o)
+	}
+	const o : UTSJSONObject = {
+		"success" : q.success,
+		"balanceText" : q.balanceText,
+		"credentialExpired" : q.credentialExpired,
+		"message" : q.message,
+		"error" : q.error,
+		"queriedAt" : q.queriedAt,
+		"tiers" : tiers
+	}
+	uni.setStorageSync(KEY_PREFIX + providerId, JSON.stringify(o))
+}
+
+export function loadLastQuota(providerId : string) : QuotaResult | null {
+	const raw = uni.getStorageSync(KEY_PREFIX + providerId)
+	if (raw == null) return null
+	if (typeof raw != "string") return null
+	const obj = JSON.parse<UTSJSONObject>(raw as string)
+	if (obj == null) return null
+
+	const tiers : QuotaTier[] = []
+	const arr = obj.getArray("tiers")
+	if (arr != null) {
+		for (let itemAny of arr) {
+			const item = itemAny as UTSJSONObject
+			let name : string = ""
+			const n = item.getString("name")
+			if (n != null) name = n
+			let util : number = 0.0
+			const u = item.getNumber("utilization")
+			if (u != null) util = u
+			const t : QuotaTier = {
+				name : name,
+				utilization : util,
+				resetsAt : item.getString("resetsAt"),
+				usedValueUsd : item.getNumber("usedValueUsd"),
+				maxValueUsd : item.getNumber("maxValueUsd")
+			}
+			tiers.push(t)
+		}
+	}
+
+	let success = false
+	const s = obj.getBoolean("success")
+	if (s != null) success = s
+	let expired = false
+	const e = obj.getBoolean("credentialExpired")
+	if (e != null) expired = e
+	let queriedAt : number = 0
+	const qa = obj.getNumber("queriedAt")
+	if (qa != null) queriedAt = qa
+
+	const r : QuotaResult = {
+		success : success,
+		credentialExpired : expired,
+		transient : false,
+		message : obj.getString("message"),
+		error : obj.getString("error"),
+		tiers : tiers,
+		balanceText : obj.getString("balanceText"),
+		queriedAt : queriedAt
+	}
+	return r
+}
+
+export function clearLastQuota(providerId : string) {
+	uni.removeStorageSync(KEY_PREFIX + providerId)
+}

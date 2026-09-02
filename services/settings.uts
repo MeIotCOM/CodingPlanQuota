@@ -1,0 +1,36 @@
+// 查询行为设置（MVP 仅前台生效；后台轮询与超限推送见路线图 P2）
+
+export type AppSettings = {
+	autoRefreshOnShow : boolean // 打开 App / 页面回前台时自动刷新
+	pollIntervalMin : number    // 前台轮询间隔（分钟），0 = 关闭
+}
+
+const KEY = "pq_settings"
+
+export function defaultSettings() : AppSettings {
+	const s : AppSettings = { autoRefreshOnShow : true, pollIntervalMin : 0 }
+	return s
+}
+
+export function loadSettings() : AppSettings {
+	const d = defaultSettings()
+	const raw = uni.getStorageSync(KEY)
+	if (raw == null) return d
+	if (typeof raw != "string") return d
+	const obj = JSON.parse<UTSJSONObject>(raw as string)
+	if (obj == null) return d
+
+	const auto = obj.getBoolean("autoRefreshOnShow")
+	if (auto != null) d.autoRefreshOnShow = auto
+	const iv = obj.getNumber("pollIntervalMin")
+	if (iv != null) d.pollIntervalMin = iv
+	return d
+}
+
+export function saveSettings(s : AppSettings) {
+	const obj : UTSJSONObject = {
+		"autoRefreshOnShow" : s.autoRefreshOnShow,
+		"pollIntervalMin" : s.pollIntervalMin
+	}
+	uni.setStorageSync(KEY, JSON.stringify(obj))
+}

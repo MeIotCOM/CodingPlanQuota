@@ -1,0 +1,81 @@
+// ZenMux 额度查询 —— 规格见 docs/provider-api-spec.md 第 5 节。
+//
+// GET {base_url} —— 用户配置的 base_url 本身就是完整额度端点（从 ZenMux 控制台复制）。
+// ⚠️ usage_percentage 是 0-1 小数，需 *100。
+// 独有 used_value_usd / max_value_usd 美元金额字段。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, makeTier, makeOk, makeFail, makeTransientFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+function windowToTier(window : UTSJSONObject, tierName : string) : QuotaTier {
+	let usagePct = num(window["usage_percentage"])
+	if (usagePct == null) usagePct = 0.0
+
+	let resetsAt : string | null = null
+	const resetsRaw = str(window["resets_at"])
+	if (resetsRaw != null) resetsAt = resetsRaw
+
+	const usedUsd = num(window["used_value_usd"])
+	const maxUsd = num(window["max_value_usd"])
+
+	return makeTier(tierName, usagePct * 100.0, resetsAt, usedUsd, maxUsd)
+}
+
+function parseZenmux(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		// 业务级错误：success != true 时读 message
+		const okRaw = body["success"]
+		if (okRaw == null || typeof okRaw != "boolean" || (okRaw as boolean) != true) {
+			let msg : string = t("err.unknown")
+			const rawMsg = str(body["message"])
+			if (rawMsg != null) msg = rawMsg
+			return makeFail(t("err.apiPrefix") + msg, false)
+		}
+
+		const data = body.getJSON("data")
+		if (data == null) return makeFail(t("err.noData"), false)
+
+		const tiers : QuotaTier[] = []
+		const q5h = data.getJSON("quota_5_hour")
+		if (q5h != null) {
+			tiers.push(windowToTier(q5h, "five_hour"))
+		}
+		const q7d = data.getJSON("quota_7_day")
+		if (q7d != null) {
+			tiers.push(windowToTier(q7d, "weekly_limit"))
+		}
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+
+		// 套餐等级 + 账户状态
+		let planInfo = ""
+		const plan = data.getJSON("plan")
+		if (plan != null) {
+			const tierName = str(plan["tier"])
+			if (tierName != null && tierName.length > 0) {
+				const accountStatus = str(data["account_status"])
+				planInfo = tierName + (accountStatus != null && accountStatus.length > 0 ? "（" + accountStatus + "）" : "")
+			}
+		}
+		return makeOk(tiers, planInfo.length > 0 ? planInfo : null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchZenmux(baseUrl : string, apiKey : string) : Promise<QuotaResult> {
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + apiKey,
+		"Accept" : "application/json"
+	}
+	return getJson(baseUrl, header)
+		.then((res : HttpResponse) : QuotaResult => parseZenmux(res))
+		.catch((_e) : QuotaResult => makeTransientFail(t("err.network")))
+}

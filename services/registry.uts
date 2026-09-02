@@ -1,0 +1,511 @@
+// 供应商注册表 + 本地凭据存储 + 查询分发。
+// 凭据 MVP 阶段存 uni storage（JSON 明文）；二期迁移到各端安全存储
+// （iOS Keychain / Android Keystore / 鸿蒙 HUKS），见 README 路线图。
+//
+// 供应商分两类：
+// - 内置（kind 直接对应供应商）：端点由 defaultUrlForKind 按官方地址拼接；
+// - 自定义（kind == "custom"）：用户填完整端点 URL + 自选「协议模板」（protocol），
+//   复用内置供应商的解析器——适配自建中转站 / 第三方镜像等场景。
+
+import { StoredProvider, QuotaResult } from '../utils/types'
+import { t } from '../utils/i18n'
+import { vaultWrite, vaultRead, vaultDelete } from '../utils/vault'
+import { fetchKimi } from './quota/kimi'
+import { fetchZhipu, fetchZhipuTeam, zhipuQuotaBase } from './quota/zhipu'
+import { fetchMinimax, minimaxDomain } from './quota/minimax'
+import { fetchZenmux } from './quota/zenmux'
+import { fetchOpencodeGo } from './quota/opencode_go'
+import { fetchCustomJson } from './quota/custom_json'
+import { fetchVolcengine } from './quota/volcengine'
+import { fetchDeepseek } from './quota/deepseek'
+import { makeFail } from './quota/shared'
+
+/** 供应商类型元信息（驱动编辑页表单与首页标签；文案经 i18n key 取值） */
+export type ProviderKindMeta = {
+	kind : string
+	labelKey : string
+	needsBaseUrl : boolean     // true = 表单展示 Base URL 输入框
+	baseUrlHint : string       // 输入框提示文案（技术示例，不本地化）
+	baseUrlOptional : boolean  // true = 可留空走默认
+	needsTeamFields : boolean  // zhipu_team 的组织/项目 ID
+	needsAkSk : boolean        // volcengine：需要 AccessKey ID / Secret
+	needsProtocol : boolean    // custom：需要选择解析协议模板
+	noteKey : string           // 表单下方说明（i18n key）
+}
+
+export const PROVIDER_KINDS : ProviderKindMeta[] = [
+	{
+		kind : "zhipu",
+		labelKey : "kind.zhipu",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.zhipu.note"
+	},
+	{
+		kind : "zhipu_team",
+		labelKey : "kind.zhipu_team",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : true,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.zhipu_team.note"
+	},
+	{
+		kind : "kimi",
+		labelKey : "kind.kimi",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.kimi.note"
+	},
+	{
+		kind : "minimax",
+		labelKey : "kind.minimax",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.minimax.note"
+	},
+	{
+		kind : "zenmux",
+		labelKey : "kind.zenmux",
+		needsBaseUrl : true,
+		baseUrlHint : "https://…（ZenMux 控制台提供的额度端点完整地址）",
+		baseUrlOptional : false,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.zenmux.note"
+	},
+	{
+		kind : "opencode_go",
+		labelKey : "kind.opencode_go",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.opencode_go.note"
+	},
+	{
+		kind : "custom",
+		labelKey : "kind.custom",
+		needsBaseUrl : true,
+		baseUrlHint : "https://…/api/monitor/usage/quota/limit（完整额度查询端点 URL）",
+		baseUrlOptional : false,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : true,
+		noteKey : "kind.custom.note"
+	},
+	{
+		kind : "volcengine",
+		labelKey : "kind.volcengine",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : true,
+		needsProtocol : false,
+		noteKey : "kind.volcengine.note"
+	},
+	{
+		kind : "deepseek",
+		labelKey : "kind.deepseek",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : "kind.deepseek.note"
+	}
+]
+
+/** 解析协议模板（自定义供应商用）：决定用哪家的解析器 + 请求头风格 */
+export type ProtocolMeta = {
+	id : string
+	labelKey : string
+	needsTeamFields : boolean // zhipu_team 协议需要组织/项目 ID
+	hintKey : string          // 端点 URL 示例（i18n key）
+}
+
+export const PROTOCOLS : ProtocolMeta[] = [
+	{
+		id : "zhipu",
+		labelKey : "proto.zhipu",
+		needsTeamFields : false,
+		hintKey : "proto.zhipu.hint"
+	},
+	{
+		id : "zhipu_team",
+		labelKey : "proto.zhipu_team",
+		needsTeamFields : true,
+		hintKey : "proto.zhipu_team.hint"
+	},
+	{
+		id : "kimi",
+		labelKey : "proto.kimi",
+		needsTeamFields : false,
+		hintKey : "proto.kimi.hint"
+	},
+	{
+		id : "minimax",
+		labelKey : "proto.minimax",
+		needsTeamFields : false,
+		hintKey : "proto.minimax.hint"
+	},
+	{
+		id : "zenmux",
+		labelKey : "proto.zenmux",
+		needsTeamFields : false,
+		hintKey : "proto.zenmux.hint"
+	},
+	{
+		id : "opencode_go",
+		labelKey : "proto.opencode_go",
+		needsTeamFields : false,
+		hintKey : "proto.opencode_go.hint"
+	},
+	{
+		id : "custom_json",
+		labelKey : "proto.custom_json",
+		needsTeamFields : false,
+		hintKey : "proto.custom_json.hint"
+	}
+]
+
+export function kindMeta(kind : string) : ProviderKindMeta {
+	for (let m of PROVIDER_KINDS) {
+		if (m.kind == kind) return m
+	}
+	const fallback : ProviderKindMeta = {
+		kind : kind,
+		labelKey : kind,
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsProtocol : false,
+		noteKey : ""
+	}
+	return fallback
+}
+
+export function kindLabel(kind : string) : string {
+	return t(kindMeta(kind).labelKey)
+}
+
+export function protocolMeta(protocol : string) : ProtocolMeta {
+	for (let m of PROTOCOLS) {
+		if (m.id == protocol) return m
+	}
+	const fallback : ProtocolMeta = {
+		id : protocol,
+		labelKey : protocol,
+		needsTeamFields : false,
+		hintKey : ""
+	}
+	return fallback
+}
+
+export function protocolLabel(protocol : string) : string {
+	if (protocol.length == 0) return ""
+	return t(protocolMeta(protocol).labelKey)
+}
+
+/** 卡片头像字母：内置供应商用固定字母，自定义取用户显示名首字符 */
+export function kindAvatarLetter(kind : string, label : string) : string {
+	if (kind == "zhipu" || kind == "zhipu_team") return "智"
+	if (kind == "kimi") return "K"
+	if (kind == "minimax") return "M"
+	if (kind == "zenmux") return "Z"
+	if (kind == "opencode_go") return "G"
+	if (kind == "custom") {
+		if (label.trim().length > 0) {
+			return label.trim().charAt(0).toUpperCase()
+		}
+		return t("kind.custom").charAt(0)
+	}
+	return "?"
+}
+
+/** 供应商品牌图标路径（cc-switch 收集的官方 SVG 转制）；无图标返回 ""，回退字母头像 */
+export function kindIconPath(kind : string) : string {
+	if (kind == "zhipu" || kind == "zhipu_team") return "/static/providers/zhipu.png"
+	if (kind == "kimi") return "/static/providers/kimi.png"
+	if (kind == "minimax") return "/static/providers/minimax.png"
+	if (kind == "deepseek") return "/static/providers/deepseek.png"
+	if (kind == "volcengine") return "/static/providers/volcengine.png"
+	return ""
+}
+
+/** 卡片头像底色（按品牌色系区分，仅字母头像模式使用） */
+export function kindAvatarColor(kind : string) : string {
+	if (kind == "zhipu") return "#3B82F6"
+	if (kind == "zhipu_team") return "#1E40AF"
+	if (kind == "kimi") return "#0F172A"
+	if (kind == "minimax") return "#EF4444"
+	if (kind == "zenmux") return "#8B5CF6"
+	if (kind == "opencode_go") return "#10B981"
+	if (kind == "volcengine") return "#F97316"
+	if (kind == "deepseek") return "#4D6BFE"
+	return "#64748B"
+}
+
+/** 内置供应商的官方默认端点（自定义供应商不走这里，直接用用户填的 URL） */
+function defaultUrlForKind(kind : string, baseUrl : string) : string {
+	if (kind == "kimi") return "https://api.kimi.com/coding/v1/usages"
+	if (kind == "zhipu") return zhipuQuotaBase(baseUrl) + "/api/monitor/usage/quota/limit"
+	if (kind == "zhipu_team") return "https://open.bigmodel.cn/api/monitor/usage/quota/limit?type=2"
+	if (kind == "minimax") return "https://" + minimaxDomain(baseUrl) + "/v1/api/openplatform/coding_plan/remains"
+	if (kind == "zenmux") return baseUrl
+	if (kind == "opencode_go") return "https://opencode.ai/zen/go/v1/usage"
+	return ""
+}
+
+/** 按协议路由到解析器（url = 完整请求端点） */
+function fetchByProtocol(protocol : string, url : string, p : StoredProvider) : Promise<QuotaResult> {
+	if (protocol == "kimi") return fetchKimi(url, p.apiKey)
+	if (protocol == "zhipu") return fetchZhipu(url, p.apiKey)
+	if (protocol == "zhipu_team") return fetchZhipuTeam(url, p.apiKey, p.organizationId, p.projectId)
+	if (protocol == "minimax") return fetchMinimax(url, p.apiKey)
+	if (protocol == "zenmux") return fetchZenmux(url, p.apiKey)
+	if (protocol == "opencode_go") return fetchOpencodeGo(url, p.apiKey)
+	if (protocol == "custom_json") return fetchCustomJson(url, p.apiKey, p.customQuery)
+	if (protocol == "volcengine") return fetchVolcengine(p.baseUrl, p.accessKeyId, p.secretAccessKey)
+	if (protocol == "deepseek") return fetchDeepseek(p.apiKey)
+	return new Promise<QuotaResult>((resolve) => {
+		resolve(makeFail(t("err.unknownProto") + protocol, false))
+	})
+}
+
+/** 查询分发：内置 kind 用官方默认端点；custom 用用户端点 + 自选协议 */
+export function fetchQuota(p : StoredProvider) : Promise<QuotaResult> {
+	if (p.kind == "custom") {
+		const url = p.baseUrl.trim()
+		if (url.length == 0) {
+			return new Promise<QuotaResult>((resolve) => {
+				resolve(makeFail(t("err.customNoUrl"), false))
+			})
+		}
+		const protocol = p.protocol.length > 0 ? p.protocol : "zhipu"
+		return fetchByProtocol(protocol, url, p)
+	}
+	return fetchByProtocol(p.kind, defaultUrlForKind(p.kind, p.baseUrl), p)
+}
+
+// ── 本地存储 ────────────────────────────────────────────────
+// 存储格式带 schemaVersion：以后字段演进时据此做显式迁移，不靠猜。
+// 读取对旧格式（无 schemaVersion）容错，缺字段一律默认空值。
+
+const STORAGE_KEY = "pq_providers"   // 旧明文键：仅作迁移读取与清除，不再写入
+const VAULT_KEY = "pq_vault_providers" // 新存储键：走 vault（Android Keystore 加密，回落明文）
+const SCHEMA_VERSION = 1
+
+/**
+ * 一次性迁移：检测旧明文 pq_providers，有则迁入 vault 并删除明文键。
+ * 幂等：无旧键时什么都不做；每次启动在首页 onShow 调用。
+ */
+export function migrateToVaultIfNeeded() {
+	const raw = uni.getStorageSync(STORAGE_KEY)
+	if (raw == null) return
+	if (typeof raw != "string") return
+	const s = raw as string
+	if (s.length == 0) {
+		uni.removeStorageSync(STORAGE_KEY)
+		return
+	}
+	const list = parseProviderJson(s)
+	if (list.length > 0) {
+		// 保存走 vault；迁移期间临时关闭回落判断不影响（vaultWrite 自带回落）
+		saveProviders(list)
+	}
+	uni.removeStorageSync(STORAGE_KEY)
+}
+
+function reqStr(item : UTSJSONObject, key : string) : string {
+	const v = item.getString(key)
+	if (v == null) return ""
+	return v
+}
+
+/** 单条供应商记录反序列化（id 为空视为非法丢弃） */
+function providerFromJson(item : UTSJSONObject) : StoredProvider | null {
+	const p : StoredProvider = {
+		id : reqStr(item, "id"),
+		kind : reqStr(item, "kind"),
+		label : reqStr(item, "label"),
+		baseUrl : reqStr(item, "baseUrl"),
+		apiKey : reqStr(item, "apiKey"),
+		protocol : reqStr(item, "protocol"),
+		customQuery : reqStr(item, "customQuery"),
+		accessKeyId : reqStr(item, "accessKeyId"),
+		secretAccessKey : reqStr(item, "secretAccessKey"),
+		organizationId : reqStr(item, "organizationId"),
+		projectId : reqStr(item, "projectId")
+	}
+	if (p.id.length == 0) return null
+	return p
+}
+
+function providerToJson(p : StoredProvider) : UTSJSONObject {
+	const item : UTSJSONObject = {
+		"id" : p.id,
+		"kind" : p.kind,
+		"label" : p.label,
+		"baseUrl" : p.baseUrl,
+		"apiKey" : p.apiKey,
+		"protocol" : p.protocol,
+		"customQuery" : p.customQuery,
+		"accessKeyId" : p.accessKeyId,
+		"secretAccessKey" : p.secretAccessKey,
+		"organizationId" : p.organizationId,
+		"projectId" : p.projectId
+	}
+	return item
+}
+
+/** 解析 providers JSON 文本（vault 与旧明文共用） */
+function parseProviderJson(s : string) : StoredProvider[] {
+	const out : StoredProvider[] = []
+	const obj = JSON.parse<UTSJSONObject>(s)
+	if (obj == null) return out
+	const arr = obj.getArray("providers")
+	if (arr == null) return out
+
+	for (let itemAny of arr) {
+		const p = providerFromJson(itemAny as UTSJSONObject)
+		if (p != null) {
+			out.push(p)
+		}
+	}
+	return out
+}
+
+export function loadProviders() : StoredProvider[] {
+	// 先读 vault（加密/回落区）
+	const vraw = vaultRead(VAULT_KEY)
+	if (vraw != null && vraw.length > 0) {
+		return parseProviderJson(vraw)
+	}
+	// vault 为空 → 读旧明文键（兼容：未触发迁移前也能读到数据）
+	const raw = uni.getStorageSync(STORAGE_KEY)
+	if (raw == null) return []
+	if (typeof raw != "string") return []
+	const s = raw as string
+	if (s.length == 0) return []
+	return parseProviderJson(s)
+}
+
+export function saveProviders(list : StoredProvider[]) {
+	const arr : Array<UTSJSONObject> = []
+	for (let p of list) {
+		arr.push(providerToJson(p))
+	}
+	const wrapper : UTSJSONObject = {
+		"schemaVersion" : SCHEMA_VERSION,
+		"providers" : arr
+	}
+	vaultWrite(VAULT_KEY, JSON.stringify(wrapper))
+}
+
+// ── 配置备份：导出 / 导入 ────────────────────────────────────
+// 导出为 JSON 文本（含 API Key，明文——提示用户妥善保管）；
+// 导入按 id 合并：已存在则覆盖更新，不存在则新增。
+
+/** 导出结果 */
+export type ImportResult = {
+	ok : boolean
+	added : number
+	updated : number
+	invalid : number // 非法记录数（缺 id/kind/apiKey）
+}
+
+export function exportConfigJson() : string {
+	const list = loadProviders()
+	const arr : Array<UTSJSONObject> = []
+	for (let p of list) {
+		arr.push(providerToJson(p))
+	}
+	const wrapper : UTSJSONObject = {
+		"app" : "CodingPlanQuota",
+		"schemaVersion" : SCHEMA_VERSION,
+		"exportedAt" : Date.now(),
+		"providers" : arr
+	}
+	return JSON.stringify(wrapper)
+}
+
+/** 解析导出文本并按 id 合并进本地存储 */
+export function importConfigJson(json : string) : ImportResult {
+	const result : ImportResult = { ok : false, added : 0, updated : 0, invalid : 0 }
+	const obj = JSON.parse<UTSJSONObject>(json)
+	if (obj == null) return result
+	const arr = obj.getArray("providers")
+	if (arr == null) return result
+
+	const list = loadProviders()
+	for (let itemAny of arr) {
+		const item = itemAny as UTSJSONObject
+		// 最小合法性：id + kind + apiKey 齐全才收
+		if (reqStr(item, "id").length == 0 || reqStr(item, "kind").length == 0 || reqStr(item, "apiKey").length == 0) {
+			result.invalid = result.invalid + 1
+			continue
+		}
+		const p = providerFromJson(item)
+		if (p == null) {
+			result.invalid = result.invalid + 1
+			continue
+		}
+		let found = false
+		for (let i = 0; i < list.length; i++) {
+			if (list[i].id == p.id) {
+				list[i] = p
+				found = true
+				result.updated = result.updated + 1
+				break
+			}
+		}
+		if (!found) {
+			list.push(p)
+			result.added = result.added + 1
+		}
+	}
+	saveProviders(list)
+	result.ok = true
+	return result
+}
+
+export function deleteProvider(id : string) {
+	const list = loadProviders()
+	const rest : StoredProvider[] = []
+	for (let p of list) {
+		if (p.id != id) rest.push(p)
+	}
+	saveProviders(rest)
+}
+
+/** 清除全部供应商凭据（含 vault 与旧明文键） */
+export function deleteAllProviders() {
+	vaultDelete(VAULT_KEY)
+	uni.removeStorageSync(STORAGE_KEY)
+}
+
+export function genId() : string {
+	return ("" + Date.now()) + "-" + ("" + Math.floor(Math.random() * 100000))
+}

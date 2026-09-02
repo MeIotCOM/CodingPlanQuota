@@ -1,0 +1,10 @@
+{
+  "id": "pq-vault",
+  "displayName": "pq-vault 安全存储",
+  "version": "0.1.0",
+  "description": "系统安全区加密存储：Android Keystore（AES-256/GCM）实装；iOS Keychain / 鸿蒙 HUKS 待接入（当前回落普通沙盒存储）",
+  "uni_modules": {
+    "dependencies": [],
+    "uni-ext-api": {}
+  }
+}
