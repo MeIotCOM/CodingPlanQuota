@@ -65,14 +65,12 @@ def extract_changelog_section(changelog_path: str, version: str):
     return "\n".join(section)
 
 
-def build_notes(version: str, cn_section: str, repo: str) -> str:
+def build_notes(version: str, cn_section: str, repo: str, en_section: str | None = None) -> str:
     tag = f"v{version}"
     changelog_url = f"https://github.com/{repo}/blob/main/CHANGELOG.md"
     return f"""## ✨ What's New
 
-<!-- TODO: 用英文概括本版本要点（1-6 条），与下方中文条目对应 -->
-- TODO: highlight one
-- TODO: highlight two
+{en_section}
 
 Also in this release: see the Chinese section below and
 [CHANGELOG.md]({changelog_url}) for the full details.
@@ -124,18 +122,28 @@ def main() -> None:
                         help="生成后用 gh 创建/更新 Release")
     parser.add_argument("--draft", action="store_true",
                         help="配合 --publish，创建为草稿")
+    parser.add_argument("--en-file", default=None,
+                        help="英文要点文件（Markdown 片段）；提供后英文段不再留 TODO。"
+                             "可让 AI 依据 CHANGELOG 中文条目翻译生成")
     args = parser.parse_args()
 
     version = normalize(args.version)
+    en_section = None
+    if args.en_file:
+        with open(args.en_file, encoding="utf-8") as f:
+            en_section = f.read().strip()
+        if en_section == "":
+            en_section = None
     notes = build_notes(version, extract_changelog_section("CHANGELOG.md", version),
-                        args.repo)
+                        args.repo, en_section)
 
     out = args.out or f"/tmp/relnotes-v{version}.md"
     with open(out, "w", encoding="utf-8") as f:
         f.write(notes)
     print(f"已生成: {out}")
-    print("下一步: 填写英文段 TODO → 上传 APK → (可选) --publish 或 "
-          f"gh release edit/create {version}")
+    if en_section is None:
+        print("下一步: 填写英文段 TODO（或用 --en-file 传入英文要点）→ 上传 APK → "
+              f"(可选) --publish 或 gh release edit/create v{version}")
 
     if args.publish:
         publish(f"v{version}", out, args.draft)
