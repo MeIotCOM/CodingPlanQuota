@@ -1,0 +1,68 @@
+// Codex (feelol) 用量查询 —— GET feea.lol/api/v1/subscriptions（Bearer）。
+// 规格移植自 ai-quota-dashboard CodexFeelolRepositoryImpl。
+// ⚠️ 实验性支持：第三方中转服务，未经广泛验证。
+// 展示：日 / 周 / 月美元额度 + 套餐到期（expiresAt）。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+/** 一个美元窗口：Usage / Limit → 百分比，走 used/max 美元字段展示 */
+function usdWindow(item : UTSJSONObject, usageKey : string, limitKey : string, tierName : string) : QuotaTier | null {
+	const usage = num(item[usageKey])
+	const limit = num(item[limitKey])
+	if (usage == null || limit == null) return null
+	const u = usage as number
+	const l = limit as number
+	if (l <= 0.0) return null
+	return makeTier(tierName, u / l * 100.0, null, u, l)
+}
+
+function parseFeelol(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		const data = body.getJSON("data")
+		if (data == null) return makeFail(t("err.noData"), false)
+
+		const tiers : QuotaTier[] = []
+		const daily = usdWindow(data, "dailyUsageUsd", "dailyLimitUsd", "five_hour")
+		if (daily != null) tiers.push(daily)
+		const monthly = usdWindow(data, "monthlyUsageUsd", "monthlyLimitUsd", "monthly")
+		if (monthly != null) tiers.push(monthly)
+
+		// 到期时间 → message 展示
+		let message = ""
+		const expiresAt = str(data["expiresAt"])
+		if (expiresAt != null && expiresAt.length > 0) {
+			message = t("feol.expires") + " " + expiresAt
+		}
+
+		if (tiers.length == 0 && message.length == 0) {
+			return makeFail(t("err.noTiers"), false)
+		}
+		return makeOk(tiers, message.length > 0 ? message : null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchCodexFeelol(accessToken : string) : Promise<QuotaResult> {
+	if (accessToken.trim().length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.noToken"), false))
+		})
+	}
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + accessToken,
+		"Accept" : "application/json"
+	}
+	return getJson("https://feea.lol/api/v1/subscriptions", header)
+		.then((res : HttpResponse) : QuotaResult => parseFeelol(res))
+		.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+}

@@ -1,0 +1,92 @@
+// ChatGPT Plus 套餐信息 —— 无网络请求，解析用户粘贴的 session JSON。
+// 规格移植自 ai-quota-dashboard ChatGPTPlusRepositoryImpl：
+//   session JSON 形如 { "accessToken": "...", "plan": { "id","title","renewalDate","interval" } }
+//   用户提供方式：浏览器访问 chatgpt.com/api/auth/session 复制响应。
+// 展示：套餐名 + 续费倒计时（按上次续费日 + 30/365 天周期换算已用百分比）。
+
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, makeTier, makeOk, makeFail } from './shared'
+import { t } from '../../utils/i18n'
+
+const DAY_MS = 86400000.0
+
+function parseSession(jsonText : string) : QuotaResult {
+	const body = JSON.parse<UTSJSONObject>(jsonText)
+	if (body == null) return makeFail(t("err.badSessionJson"), false)
+
+	let planName = "Plus"
+	let renewalStr = ""
+	let billingPeriod = "monthly"
+
+	const plan = body.getJSON("plan")
+	if (plan != null) {
+		const title = str(plan["title"])
+		if (title != null && title.length > 0) planName = title as string
+		else {
+			const pid = str(plan["id"])
+			if (pid != null && pid.length > 0) planName = pid as string
+		}
+		const rd = str(plan["renewalDate"])
+		if (rd != null) renewalStr = rd as string
+		const interval = str(plan["interval"])
+		if (interval != null && (interval as string).toLowerCase() == "year") billingPeriod = "yearly"
+	}
+	// 顶层 renewalDate 兜底
+	if (renewalStr.length == 0) {
+		const rd2 = str(body["renewalDate"])
+		if (rd2 != null) renewalStr = rd2 as string
+	}
+
+	const periodDays = billingPeriod == "yearly" ? 365.0 : 30.0
+
+	if (renewalStr.length == 0) {
+		// 无续费日期：只展示套餐名
+		const r = makeOk([], planName)
+		return r
+	}
+
+	try {
+		// 期望 yyyy-MM-dd
+		const segs = renewalStr.split("-")
+		if (segs.length != 3) return makeFail(t("err.badRenewalDate"), false)
+		const y = parseInt(segs[0])
+		const mo = parseInt(segs[1])
+		const d = parseInt(segs[2])
+		if (isNaN(y) || isNaN(mo) || isNaN(d)) return makeFail(t("err.badRenewalDate"), false)
+		const renewalMs = new Date(y, mo - 1, d).getTime()
+		if (isNaN(renewalMs)) return makeFail(t("err.badRenewalDate"), false)
+
+		const now = Date.now()
+		const nextRenewal = renewalMs + periodDays * DAY_MS
+		let remaining = nextRenewal - now
+		let utilization : number
+		if (remaining <= 0) {
+			utilization = 100.0
+			remaining = 0
+		} else {
+			utilization = (1.0 - remaining / (periodDays * DAY_MS)) * 100.0
+			if (utilization < 0.0) utilization = 0.0
+			if (utilization > 100.0) utilization = 100.0
+		}
+		const resetsIso = new Date(nextRenewal).toISOString()
+
+		const tier = makeTier("five_hour", utilization, resetsIso, null, null)
+		const days = Math.floor(remaining / DAY_MS)
+		const message = planName + " · " + t("cgp.remainingPrefix") + days + t("cgp.remainingSuffix")
+		const r = makeOk([tier], message)
+		return r
+	} catch (e) {
+		return makeFail(t("err.badRenewalDate"), false)
+	}
+}
+
+export function fetchChatgptPlus(sessionJson : string) : Promise<QuotaResult> {
+	if (sessionJson.trim().length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.noSession"), false))
+		})
+	}
+	return new Promise<QuotaResult>((resolve) => {
+		resolve(parseSession(sessionJson.trim()))
+	})
+}

@@ -1,0 +1,87 @@
+// Codex（ChatGPT 订阅）用量查询 —— GET chatgpt.com/backend-api/wham/usage。
+// 规格移植自 ai-quota-dashboard（CodexBar-android fork）CodexDto/CodexApiService。
+// ⚠️ 实验性支持：内部接口，未经广泛验证；凭据为 ChatGPT access_token
+//（用户可从 chatgpt.com/api/auth/session 获取）。
+// token 刷新链（auth.openai.com v1/oauth/token）暂未接入：token 过期时提示重新获取。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+/** 一个 wham 窗口的解析（used_percent 已用百分比，reset_at 为 unix 秒） */
+function windowToTier(window : UTSJSONObject, tierName : string) : QuotaTier | null {
+	const used = num(window["used_percent"])
+	if (used == null) return null
+	const resetsAt = extractResetTime(window["reset_at"])
+	return makeTier(tierName, used as number, resetsAt, null, null)
+}
+
+function parseCodex(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		const tiers : QuotaTier[] = []
+		const rateLimit = body.getJSON("rate_limit")
+		if (rateLimit != null) {
+			const primary = rateLimit.getJSON("primary_window")
+			if (primary != null) {
+				const tier = windowToTier(primary, "five_hour")
+				if (tier != null) tiers.push(tier)
+			}
+			const secondary = rateLimit.getJSON("secondary_window")
+			if (secondary != null) {
+				const tier = windowToTier(secondary, "weekly_limit")
+				if (tier != null) tiers.push(tier)
+			}
+		}
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+
+		// 套餐类型 + credits 信息
+		let plan = str(body["plan_type"])
+		let message = plan == null ? "" : (plan as string)
+		const credits = body.getJSON("credits")
+		if (credits != null) {
+			const unlimited = credits["unlimited"]
+			if (unlimited != null && typeof unlimited == "boolean" && (unlimited as boolean)) {
+				message = message + (message.length > 0 ? " · " : "") + t("codex.unlimited")
+			} else {
+				let balance = credits["balance"]
+				if (balance != null) {
+					const b = num(balance)
+					if (b != null) {
+						message = message + (message.length > 0 ? " · " : "") + t("codex.credits") + " $" + (b as number).toFixed(2)
+					}
+				}
+			}
+		}
+
+		const r = makeOk(tiers, message.length > 0 ? message : null)
+		return r
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchCodex(accessToken : string, accountId : string) : Promise<QuotaResult> {
+	if (accessToken.trim().length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.noToken"), false))
+		})
+	}
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + accessToken,
+		"User-Agent" : "CodingPlanQuota",
+		"Accept" : "application/json"
+	}
+	if (accountId.trim().length > 0) {
+		header["ChatGPT-Account-Id"] = accountId.trim()
+	}
+	return getJson("https://chatgpt.com/backend-api/wham/usage", header)
+		.then((res : HttpResponse) : QuotaResult => parseCodex(res))
+		.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+}

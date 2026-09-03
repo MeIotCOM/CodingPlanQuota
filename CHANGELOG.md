@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-02
+
+### Added
+
+- 供应商扩展（实验性，待社区验证）：Codex（wham/usage 5h/7d）、Codex feelol（日/月
+  美元额度）、ChatGPT Plus（session JSON 粘贴解析，无网络请求）、MiMo（后端代理/
+  直连 Cookie 双模式）、Claude（oauth/usage 五窗口）、Gemini Code Assist
+  （v1internal 按模型配额桶）。解析按 ai-quota-dashboard 提取形态防御式移植，
+  团队无对应订阅未做真机验证，README 标注并邀请带凭据用户提 issue。
+- 编辑页新增 session JSON 粘贴框与 MiMo 双模式条件表单；ChatGPT Plus / MiMo 免
+  API Key 校验放宽。
+- i18n 完善：7 张语言表 × 227 键完全对齐（补 claude.extra 与五语 64 键增量）；
+  新增 scripts/check-i18n.py 完整性校验（可作 CI 门禁）。
+
 ## [0.5.0] - 2026-09-02
 
 ### Added

@@ -1,0 +1,103 @@
+// MiMo Token Plan（小米）用量查询 —— 双模式：
+//   ① 后端代理模式：GET {backendUrl}（Bearer backendToken）
+//   ② 直连模式：GET platform.xiaomimimo.com/console/plan-manage/api/v1/tokenPlan/{usage,detail}（Cookie）
+// 规格移植自 ai-quota-dashboard MiMoRepositoryImpl / MiMoApiService。
+// ⚠️ 实验性支持：未经广泛验证；直连模式 Cookie 会随网页登录失效。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+/** usage 响应 → tiers。防御式：字段缺失跳过 */
+function parseUsage(body : UTSJSONObject) : QuotaTier[] {
+	const tiers : QuotaTier[] = []
+	const data = body.getJSON("data") != null ? body.getJSON("data")! : body
+
+	// 令牌余额 / 月用量（字段名宽松匹配）
+	let balance = num(data["balance"])
+	if (balance == null) balance = num(data["tokenBalance"])
+	if (balance == null) balance = num(data["remaining"])
+	// monthUsage / limit → 月窗口百分比
+	let used = num(data["monthUsage"])
+	let limit = num(data["limit"])
+
+	if (used != null && limit != null && (limit as number) > 0.0) {
+		const resetsAt = extractResetTime(data["currentPeriodEnd"])
+		tiers.push(makeTier("monthly", (used as number) / (limit as number) * 100.0, resetsAt, used as number, limit as number))
+	}
+	if (balance != null) {
+		// 令牌余额放 message，由调用方拼
+	}
+	return tiers
+}
+
+function balanceText(data : UTSJSONObject) : string {
+	let balance = num(data["balance"])
+	if (balance == null) balance = num(data["tokenBalance"])
+	if (balance == null) balance = num(data["remaining"])
+	if (balance == null) return ""
+	return t("mimo.balance") + " " + (balance as number).toFixed(2)
+}
+
+function handleResponse(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+	try {
+		// 业务错误信封 { code, message }
+		const codeRaw = num(body["code"])
+		if (codeRaw != null && (codeRaw as number) != 0) {
+			let msg = str(body["message"])
+			if (msg == null) msg = t("err.unknown")
+			return makeFail("API error (" + codeRaw as string + "): " + (msg as string), false)
+		}
+		const data = body.getJSON("data") != null ? body.getJSON("data")! : body
+		const tiers = parseUsage(body)
+		const bal = balanceText(data)
+		// 到期信息
+		let message = bal
+		const expiredRaw = data["expired"]
+		const periodEnd = extractResetTime(data["currentPeriodEnd"])
+		if (periodEnd != null) {
+			message = (message.length > 0 ? message + " · " : "") + t("mimo.periodEnd") + " " + (periodEnd as string).substring(0, 10)
+		}
+		if (tiers.length == 0 && message.length == 0) {
+			return makeFail(t("err.noTiers"), false)
+		}
+		return makeOk(tiers, message.length > 0 ? message : null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchMimo(backendUrl : string, backendToken : string, directCookie : string) : Promise<QuotaResult> {
+	const url = backendUrl.trim()
+	const token = backendToken.trim()
+	const cookie = directCookie.trim()
+
+	if (url.length > 0) {
+		// 后端代理模式
+		const header : UTSJSONObject = { "Accept" : "application/json" }
+		if (token.length > 0) header["Authorization"] = "Bearer " + token
+		return getJson(url, header)
+			.then((res : HttpResponse) : QuotaResult => handleResponse(res))
+			.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+	}
+	if (cookie.length > 0) {
+		// 直连模式
+		const header : UTSJSONObject = {
+			"Cookie" : cookie,
+			"Accept" : "application/json, text/plain, */*",
+			"Referer" : "https://platform.xiaomimimo.com/console/plan-manage",
+			"User-Agent" : "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.113 Mobile Safari/537.36"
+		}
+		return getJson("https://platform.xiaomimimo.com/console/plan-manage/api/v1/tokenPlan/usage", header)
+			.then((res : HttpResponse) : QuotaResult => handleResponse(res))
+			.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+	}
+	return new Promise<QuotaResult>((resolve) => {
+		resolve(makeFail(t("err.mimoNoInput"), false))
+	})
+}

@@ -29,12 +29,26 @@ anytime — no computer required.
 | Volcengine Ark (Agent / Coding Plan) | 5h / weekly / monthly | AccessKey ID + Secret (Volcengine SigV4) |
 | DeepSeek | account balance | platform API Key |
 | Custom / Relay | depends on chosen protocol | full endpoint URL + API Key + protocol template |
+| Codex (ChatGPT) ⚠️ | 5h / 7d usage windows | ChatGPT access_token (from `chatgpt.com/api/auth/session`) |
+| Codex (feelol) ⚠️ | daily / monthly USD usage + plan expiry | feea.lol bearer token |
+| ChatGPT Plus ⚠️ | plan name + renewal countdown | pasted session JSON (no network calls) |
+| MiMo Token Plan ⚠️ | token balance / monthly usage / plan expiry | backend URL+token, or direct web cookie |
+| Claude ⚠️ | 5h / weekly / model-specific windows | Claude OAuth access_token |
+| Gemini (Code Assist) ⚠️ | per-model quota buckets | Google Cloud OAuth access_token |
 
 **Custom / Relay**: paste the full quota-endpoint URL and pick a parsing-protocol template —
 one of the built-in provider protocols, or **Custom JSON mapping** (the mobile equivalent of
 cc-switch's custom usage scripts): declare the auth style (Bearer / raw key / none) and the
 JSON paths per window (direct percent, or limit+remaining with optional 0–1 fraction ×100).
 No coding required to support any read-only GET usage API.
+
+> ⚠️ **Experimental providers** — the last six rows rely on unofficial / internal endpoints
+> ported from [ai-quota-dashboard](https://github.com/MeIotCOM/CodingPlanQuota#acknowledgements)
+> and have **not been verified against real accounts** by the team (we don't hold those
+> subscriptions). The parsers are written defensively from extracted response shapes. If a
+> provider works for you — or breaks — please [open an issue](https://github.com/MeIotCOM/CodingPlanQuota/issues)
+> so the status can be updated. Tokens/Cookies expire with your web session and must be
+> re-obtained; everything is stored encrypted and never uploaded.
 
 ## Features
 

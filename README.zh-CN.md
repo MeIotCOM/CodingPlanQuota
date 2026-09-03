@@ -27,11 +27,23 @@
 | 火山方舟（Agent / Coding Plan） | 5h / 周 / 月窗口 | 访问密钥 AK/SK（火山签名 V4） |
 | DeepSeek | 账户余额 | 开放平台 API Key |
 | 自定义 / 中转站 | 取决于所选协议 | 完整端点 URL + API Key + 协议模板 |
+| Codex（ChatGPT）⚠️ | 5h / 7d 用量窗口 | ChatGPT access_token（浏览器访问 `chatgpt.com/api/auth/session` 获取） |
+| Codex (feelol) ⚠️ | 日 / 月美元用量 + 套餐到期 | feea.lol Bearer token |
+| ChatGPT Plus ⚠️ | 套餐名 + 续费倒计时 | 粘贴 session JSON（无网络请求） |
+| MiMo Token Plan ⚠️ | 令牌余额 / 月用量 / 套餐到期 | 后端 URL+Token 或直连网页 Cookie |
+| Claude ⚠️ | 5h / 周 / 模型专属窗口 | Claude OAuth access_token |
+| Gemini (Code Assist) ⚠️ | 按模型分级的配额 | Google Cloud OAuth access_token |
 
 **自定义 / 中转站**：填完整的额度查询端点 URL，再选一个解析协议模板——八家内置协议，
 或「自定义 JSON 映射」（对应 cc-switch 的自定义额度查询）：声明鉴权方式
 （Bearer / Key 直传 / 无鉴权头）+ 每个窗口的 JSON 取值路径（百分比直读，或上限+剩余差值，
 可配 0–1 小数自动 ×100），无需写代码即可适配任意只读 GET 用量接口。
+
+> ⚠️ **实验性供应商** —— 上表后六行依赖非官方/内部接口，移植自
+> ai-quota-dashboard 项目，**团队没有对应订阅、未做真机验证**（解析按提取的响应
+> 形态防御式编写）。如果你带凭据实测可用或不可用，欢迎
+> [提 issue](https://github.com/MeIotCOM/CodingPlanQuota/issues) 反馈，我们会更新验证状态。
+> Token/Cookie 会随网页会话过期需重新获取；全部凭据加密存储、绝不上传。
 
 ## 功能特性
 

@@ -18,6 +18,12 @@ import { fetchOpencodeGo } from './quota/opencode_go'
 import { fetchCustomJson } from './quota/custom_json'
 import { fetchVolcengine } from './quota/volcengine'
 import { fetchDeepseek } from './quota/deepseek'
+import { fetchCodex } from './quota/codex'
+import { fetchCodexFeelol } from './quota/codex_feelol'
+import { fetchChatgptPlus } from './quota/chatgpt_plus'
+import { fetchMimo } from './quota/mimo'
+import { fetchClaude } from './quota/claude'
+import { fetchGemini } from './quota/gemini'
 import { makeFail } from './quota/shared'
 
 /** 供应商类型元信息（驱动编辑页表单与首页标签；文案经 i18n key 取值） */
@@ -29,6 +35,8 @@ export type ProviderKindMeta = {
 	baseUrlOptional : boolean  // true = 可留空走默认
 	needsTeamFields : boolean  // zhipu_team 的组织/项目 ID
 	needsAkSk : boolean        // volcengine：需要 AccessKey ID / Secret
+	needsSessionJson : boolean // chatgpt_plus：粘贴 session JSON
+	needsMimoFields : boolean  // mimo：双模式（后端 URL+Token 或 Cookie）
 	needsProtocol : boolean    // custom：需要选择解析协议模板
 	noteKey : string           // 表单下方说明（i18n key）
 }
@@ -42,6 +50,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.zhipu.note"
 	},
@@ -53,6 +63,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : true,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.zhipu_team.note"
 	},
@@ -64,6 +76,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.kimi.note"
 	},
@@ -75,6 +89,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.minimax.note"
 	},
@@ -86,6 +102,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : false,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.zenmux.note"
 	},
@@ -97,6 +115,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.opencode_go.note"
 	},
@@ -119,8 +139,88 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : true,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.volcengine.note"
+	},
+	{
+		kind : "codex",
+		labelKey : "kind.codex",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
+		needsProtocol : false,
+		noteKey : "kind.codex.note"
+	},
+	{
+		kind : "codex_feelol",
+		labelKey : "kind.codex_feelol",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
+		needsProtocol : false,
+		noteKey : "kind.codex_feelol.note"
+	},
+	{
+		kind : "chatgpt_plus",
+		labelKey : "kind.chatgpt_plus",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsSessionJson : true,
+		needsMimoFields : false,
+		needsProtocol : false,
+		noteKey : "kind.chatgpt_plus.note"
+	},
+	{
+		kind : "mimo",
+		labelKey : "kind.mimo",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : true,
+		needsProtocol : false,
+		noteKey : "kind.mimo.note"
+	},
+	{
+		kind : "claude",
+		labelKey : "kind.claude",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
+		needsProtocol : false,
+		noteKey : "kind.claude.note"
+	},
+	{
+		kind : "gemini",
+		labelKey : "kind.gemini",
+		needsBaseUrl : false,
+		baseUrlHint : "",
+		baseUrlOptional : true,
+		needsTeamFields : false,
+		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
+		needsProtocol : false,
+		noteKey : "kind.gemini.note"
 	},
 	{
 		kind : "deepseek",
@@ -130,6 +230,8 @@ export const PROVIDER_KINDS : ProviderKindMeta[] = [
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : "kind.deepseek.note"
 	}
@@ -200,6 +302,8 @@ export function kindMeta(kind : string) : ProviderKindMeta {
 		baseUrlOptional : true,
 		needsTeamFields : false,
 		needsAkSk : false,
+		needsSessionJson : false,
+		needsMimoFields : false,
 		needsProtocol : false,
 		noteKey : ""
 	}
@@ -263,6 +367,12 @@ export function kindAvatarColor(kind : string) : string {
 	if (kind == "zenmux") return "#8B5CF6"
 	if (kind == "opencode_go") return "#10B981"
 	if (kind == "volcengine") return "#F97316"
+	if (kind == "codex") return "#10A37F"
+	if (kind == "codex_feelol") return "#0EA5E9"
+	if (kind == "chatgpt_plus") return "#10A37F"
+	if (kind == "mimo") return "#FF6900"
+	if (kind == "claude") return "#D97757"
+	if (kind == "gemini") return "#4285F4"
 	if (kind == "deepseek") return "#4D6BFE"
 	return "#64748B"
 }
@@ -289,6 +399,12 @@ function fetchByProtocol(protocol : string, url : string, p : StoredProvider) : 
 	if (protocol == "custom_json") return fetchCustomJson(url, p.apiKey, p.customQuery)
 	if (protocol == "volcengine") return fetchVolcengine(p.baseUrl, p.accessKeyId, p.secretAccessKey)
 	if (protocol == "deepseek") return fetchDeepseek(p.apiKey)
+	if (protocol == "codex") return fetchCodex(p.apiKey, p.organizationId)
+	if (protocol == "codex_feelol") return fetchCodexFeelol(p.apiKey)
+	if (protocol == "chatgpt_plus") return fetchChatgptPlus(p.sessionJson)
+	if (protocol == "mimo") return fetchMimo(p.backendUrl, p.backendToken, p.cookie)
+	if (protocol == "claude") return fetchClaude(p.apiKey)
+	if (protocol == "gemini") return fetchGemini(p.apiKey)
 	return new Promise<QuotaResult>((resolve) => {
 		resolve(makeFail(t("err.unknownProto") + protocol, false))
 	})
@@ -356,6 +472,10 @@ function providerFromJson(item : UTSJSONObject) : StoredProvider | null {
 		customQuery : reqStr(item, "customQuery"),
 		accessKeyId : reqStr(item, "accessKeyId"),
 		secretAccessKey : reqStr(item, "secretAccessKey"),
+		sessionJson : reqStr(item, "sessionJson"),
+		cookie : reqStr(item, "cookie"),
+		backendUrl : reqStr(item, "backendUrl"),
+		backendToken : reqStr(item, "backendToken"),
 		organizationId : reqStr(item, "organizationId"),
 		projectId : reqStr(item, "projectId")
 	}
@@ -378,6 +498,10 @@ function providerToJson(p : StoredProvider) : UTSJSONObject {
 		"customQuery" : p.customQuery,
 		"accessKeyId" : p.accessKeyId,
 		"secretAccessKey" : p.secretAccessKey,
+		"sessionJson" : p.sessionJson,
+		"cookie" : p.cookie,
+		"backendUrl" : p.backendUrl,
+		"backendToken" : p.backendToken,
 		"organizationId" : p.organizationId,
 		"projectId" : p.projectId,
 		"pinned" : p.pinned

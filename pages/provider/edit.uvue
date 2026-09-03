@@ -75,6 +75,36 @@
 				<input class="input" v-model="baseUrl" :placeholder="curBaseUrlHint()" />
 			</view>
 
+			<!-- ChatGPT Plus：session JSON 粘贴 -->
+			<view v-if="showSessionJson()">
+				<text class="section-title">{{ sessionTitle() }}</text>
+				<textarea class="area" v-model="sessionJson" :placeholder="sessionPh()" maxlength="-1" />
+				<text class="section-note">{{ sessionNote() }}</text>
+			</view>
+
+			<!-- MiMo：双模式 -->
+			<view v-if="showMimoFields()">
+				<text class="section-title">{{ mimoModeTitle() }}</text>
+				<view class="chips">
+					<view v-for="(opt, index) in mimoModeLabels" :key="opt"
+						:class="'chip ' + (mimoModeIndex == index ? 'chip-active' : '')"
+						@click="setMimoMode(index)">
+						<text :class="'chip-text ' + (mimoModeIndex == index ? 'chip-text-active' : '')">{{ opt }}</text>
+					</view>
+				</view>
+				<view v-if="mimoModeIndex == 0">
+					<text class="section-title">{{ mimoUrlTitle() }}</text>
+					<input class="input" v-model="backendUrl" :placeholder="mimoUrlPh()" />
+					<text class="section-title">{{ mimoTokenTitle() }}</text>
+					<input class="input" v-model="backendToken" password="true" :placeholder="mimoTokenPh()" />
+				</view>
+				<view v-else>
+					<text class="section-title">{{ mimoCookieTitle() }}</text>
+					<textarea class="area" v-model="directCookie" :placeholder="mimoCookiePh()" maxlength="-1" />
+					<text class="section-note">{{ mimoCookieNote() }}</text>
+				</view>
+			</view>
+
 			<!-- 火山方舟：AK/SK -->
 			<view v-if="showAkSk()">
 				<text class="section-title">{{ akTitle() }}</text>
@@ -119,6 +149,12 @@ const organizationId = ref("")
 const projectId = ref("")
 const accessKeyId = ref("")
 const secretAccessKey = ref("")
+const sessionJson = ref("")
+const directCookie = ref("")
+const backendUrl = ref("")
+const backendToken = ref("")
+const mimoModeLabels : string[] = [t("mimo.modeBackend"), t("mimo.modeDirect")]
+const mimoModeIndex = ref(0)
 
 // ── 自定义 JSON 映射（协议 custom_json）的表单状态 ──
 const AUTH_STYLES : string[] = ["bearer", "raw", "none"]
@@ -238,6 +274,48 @@ function skPh() : string {
 /** 火山方舟：需要 AK/SK 输入 */
 function showAkSk() : boolean {
 	return curMeta().needsAkSk
+}
+function showSessionJson() : boolean {
+	return curMeta().needsSessionJson
+}
+function showMimoFields() : boolean {
+	return curMeta().needsMimoFields
+}
+function sessionTitle() : string {
+	return t("cgp.sessionTitle")
+}
+function sessionPh() : string {
+	return t("cgp.sessionPh")
+}
+function sessionNote() : string {
+	return t("cgp.sessionNote")
+}
+function mimoModeTitle() : string {
+	return t("mimo.modeTitle")
+}
+function setMimoMode(index : number) {
+	mimoModeIndex.value = index
+}
+function mimoUrlTitle() : string {
+	return t("mimo.urlTitle")
+}
+function mimoUrlPh() : string {
+	return t("mimo.urlPh")
+}
+function mimoTokenTitle() : string {
+	return t("mimo.tokenTitle")
+}
+function mimoTokenPh() : string {
+	return t("mimo.tokenPh")
+}
+function mimoCookieTitle() : string {
+	return t("mimo.cookieTitle")
+}
+function mimoCookiePh() : string {
+	return t("mimo.cookiePh")
+}
+function mimoCookieNote() : string {
+	return t("mimo.cookieNote")
 }
 function deleteLabel() : string {
 	return t("edit.delete")
@@ -401,9 +479,21 @@ function save() {
 		toast(t("edit.toast.noName"))
 		return
 	}
-	if (apiKey.value.trim().length == 0) {
+	if (apiKey.value.trim().length == 0 && !meta.needsSessionJson && !meta.needsMimoFields) {
 		toast(t("edit.toast.noKey"))
 		return
+	}
+	if (meta.needsSessionJson && sessionJson.value.trim().length == 0) {
+		toast(t("err.noSession"))
+		return
+	}
+	if (meta.needsMimoFields) {
+		const hasBackend = backendUrl.value.trim().length > 0
+		const hasCookie = directCookie.value.trim().length > 0
+		if (!hasBackend && !hasCookie) {
+			toast(t("err.mimoNoInput"))
+			return
+		}
 	}
 	if (meta.needsBaseUrl && !meta.baseUrlOptional && baseUrl.value.trim().length == 0) {
 		toast(t("edit.toast.noBaseUrl"))
@@ -450,6 +540,10 @@ function save() {
 					apiKey : apiKey.value.trim(),
 					accessKeyId : accessKeyId.value.trim(),
 					secretAccessKey : secretAccessKey.value.trim(),
+					sessionJson : sessionJson.value.trim(),
+					cookie : directCookie.value.trim(),
+					backendUrl : backendUrl.value.trim(),
+					backendToken : backendToken.value.trim(),
 					protocol : protocol,
 					customQuery : customQuery,
 					organizationId : organizationId.value.trim(),
@@ -470,6 +564,10 @@ function save() {
 			apiKey : apiKey.value.trim(),
 			accessKeyId : accessKeyId.value.trim(),
 			secretAccessKey : secretAccessKey.value.trim(),
+			sessionJson : sessionJson.value.trim(),
+			cookie : directCookie.value.trim(),
+			backendUrl : backendUrl.value.trim(),
+			backendToken : backendToken.value.trim(),
 			protocol : protocol,
 			customQuery : customQuery,
 			organizationId : organizationId.value.trim(),
@@ -518,6 +616,11 @@ onLoad((options) => {
 				projectId.value = p.projectId
 				accessKeyId.value = p.accessKeyId
 				secretAccessKey.value = p.secretAccessKey
+				sessionJson.value = p.sessionJson
+				directCookie.value = p.cookie
+				backendUrl.value = p.backendUrl
+				backendToken.value = p.backendToken
+				mimoModeIndex.value = p.backendUrl.length > 0 ? 0 : 1
 				customQueryToForm(p.customQuery)
 				break
 			}
@@ -581,6 +684,17 @@ onLoad((options) => {
 }
 .input-gap {
 	margin-bottom : 12rpx;
+}
+
+/* 多行输入 */
+.area {
+	width : 640rpx;
+	height : 240rpx;
+	background-color : #ffffff;
+	border-radius : 16rpx;
+	padding : 20rpx 24rpx;
+	font-size : 24rpx;
+	color : #0f172a;
 }
 
 /* 操作按钮 */

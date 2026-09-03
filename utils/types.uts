@@ -33,6 +33,10 @@ export type StoredProvider = {
 	customQuery : string // 仅 custom_json 协议：序列化的自定义查询配置（鉴权方式 + JSON 路径映射）
 	accessKeyId : string    // 仅 volcengine：访问密钥 ID
 	secretAccessKey : string // 仅 volcengine：私密访问密钥
+	sessionJson : string    // 仅 chatgpt_plus：粘贴的 session JSON
+	cookie : string         // 仅 mimo 直连模式：网页 Cookie
+	backendUrl : string     // 仅 mimo 后端模式：代理端点
+	backendToken : string   // 仅 mimo 后端模式：Bearer token
 	organizationId : string // 仅 zhipu_team 协议
 	projectId : string      // 仅 zhipu_team 协议
 	pinned : boolean        // 置顶（显示时排在最前；旧数据读取缺省 false）

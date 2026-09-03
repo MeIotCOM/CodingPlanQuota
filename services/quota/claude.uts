@@ -1,0 +1,67 @@
+// Claude 订阅用量查询 —— GET platform.claude.com/api/oauth/usage（OAuth Bearer）。
+// 规格移植自 ai-quota-dashboard ClaudeRepositoryImpl / ClaudeDto（与 cc-switch subscription.rs 同源接口）。
+// ⚠️ 实验性支持：OAuth 内部接口；token 刷新链暂未接入，过期时提示重新获取。
+
+import { HttpResponse, getJson } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+/** 五窗口 → tier 名映射（UTS 不支持元组，用双平行数组） */
+const WINDOW_KEYS : string[] = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_oauth_apps"]
+const WINDOW_TIERS : string[] = ["five_hour", "weekly_limit", "claude_opus", "claude_sonnet", "claude_oauth_apps"]
+
+function parseClaude(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+
+	try {
+		const tiers : QuotaTier[] = []
+		for (let i = 0; i < WINDOW_KEYS.length; i++) {
+			const w = body.getJSON(WINDOW_KEYS[i])
+			if (w == null) continue
+			const util = num(w["utilization"])
+			if (util == null) continue
+			const resetsAt = extractResetTime(w["resets_at"])
+			tiers.push(makeTier(WINDOW_TIERS[i], (util as number) * 100.0, resetsAt, null, null))
+		}
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+
+		// extra_usage（超额购）：启用时展示月额度
+		let message = ""
+		const extra = body.getJSON("extra_usage")
+		if (extra != null) {
+			const enabled = extra["is_enabled"]
+			if (enabled != null && typeof enabled == "boolean" && (enabled as boolean)) {
+				const monthlyLimit = num(extra["monthly_limit"])
+				const usedCredits = num(extra["used_credits"])
+				if (monthlyLimit != null) {
+					message = t("claude.extra") + " $" + (usedCredits == null ? 0.0 : usedCredits as number).toFixed(2)
+						+ " / $" + (monthlyLimit as number).toFixed(2)
+				}
+			}
+		}
+		return makeOk(tiers, message.length > 0 ? message : null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+export function fetchClaude(accessToken : string) : Promise<QuotaResult> {
+	if (accessToken.trim().length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.noToken"), false))
+		})
+	}
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + accessToken,
+		"anthropic-beta" : "oauth-2025-04-20",
+		"Accept" : "application/json"
+	}
+	return getJson("https://platform.claude.com/api/oauth/usage", header)
+		.then((res : HttpResponse) : QuotaResult => parseClaude(res))
+		.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+}

@@ -1,0 +1,79 @@
+// Gemini Code Assist 配额查询 —— POST cloudcode-pa.googleapis.com/v1internal:{loadCodeAssist,retrieveUserQuota}
+// 规格移植自 ai-quota-dashboard GeminiRepositoryImpl / GeminiDto。
+// ⚠️ 实验性支持：内部接口；需要用户自备 Google Cloud OAuth access_token
+//（与 Claude 同理，刷新链暂未接入，过期提示重新获取）。
+// 响应：buckets[]（模型分级配额），防御式解析。
+
+import { HttpResponse, getJson, postEmpty } from '../../utils/http'
+import { QuotaResult, QuotaTier } from '../../utils/types'
+import { num, str, extractResetTime, makeTier, makeOk, makeFail, checkStatus } from './shared'
+import { t } from '../../utils/i18n'
+
+const BASE = "https://cloudcode-pa.googleapis.com"
+
+function parseBuckets(body : UTSJSONObject) : QuotaTier[] {
+	const tiers : QuotaTier[] = []
+	let buckets = body.getArray("buckets")
+	if (buckets == null) {
+		// 可能包在 result / response 层
+		const r1 = body.getJSON("result")
+		if (r1 != null) buckets = r1.getArray("buckets")
+	}
+	if (buckets == null) return tiers
+
+	for (let itemAny of buckets) {
+		const item = itemAny as UTSJSONObject
+		// 模型分级：径如 gemini-2.5-pro / gemini-2.5-flash
+		let model = str(item["model_id"])
+		if (model == null) model = str(item["modelId"])
+		if (model == null) model = str(item["model"])
+		if (model == null) continue
+
+		// 比例字段宽松匹配：remainingFraction / remaining_percent
+		let frac = num(item["remaining_fraction"])
+		if (frac == null) frac = num(item["remainingFraction"])
+		if (frac == null) {
+			const rp = num(item["remaining_percent"])
+			if (rp != null) frac = (rp as number) / 100.0
+		}
+		if (frac == null) continue
+		let f = frac as number
+		if (f > 1.0) f = 1.0
+		if (f < 0.0) f = 0.0
+
+		const resetsAt = extractResetTime(item["reset_time"])
+		tiers.push(makeTier("gemini:" + (model as string), (1.0 - f) * 100.0, resetsAt, null, null))
+	}
+	return tiers
+}
+
+function parseQuota(res : HttpResponse) : QuotaResult {
+	const statusErr = checkStatus(res.statusCode, res.text)
+	if (statusErr != null) return statusErr
+	const body = res.json
+	if (body == null) return makeFail(t("err.notJson"), false)
+	try {
+		const tiers = parseBuckets(body)
+		if (tiers.length == 0) return makeFail(t("err.noTiers"), false)
+		return makeOk(tiers, null)
+	} catch (e) {
+		return makeFail(t("err.parseFail"), false)
+	}
+}
+
+/** 先 loadCodeAssist 探测项目，再 retrieveUserQuota；简化为直接 retrieveUserQuota（空 project） */
+export function fetchGemini(accessToken : string) : Promise<QuotaResult> {
+	if (accessToken.trim().length == 0) {
+		return new Promise<QuotaResult>((resolve) => {
+			resolve(makeFail(t("err.noToken"), false))
+		})
+	}
+	const header : UTSJSONObject = {
+		"Authorization" : "Bearer " + accessToken,
+		"Content-Type" : "application/json",
+		"User-Agent" : "CodingPlanQuota"
+	}
+	return postEmpty(BASE + "/v1internal:retrieveUserQuota", header)
+		.then((res : HttpResponse) : QuotaResult => parseQuota(res))
+		.catch((_e) : QuotaResult => makeFail(t("err.network"), false))
+}
