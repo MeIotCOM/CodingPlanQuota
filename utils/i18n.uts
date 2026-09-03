@@ -227,7 +227,11 @@ const zhTable : UTSJSONObject = {
 	"err.platformUnsupported" : "当前平台暂不支持火山方舟查询",
 	"err.noBalance" : "响应中没有余额信息",
 	"bal.label" : "余额",
-	"bal.grantedIncl" : "（含赠送 "
+	"bal.grantedIncl" : "（含赠送 ",
+	"act.pin" : "置顶",
+	"act.unpin" : "取消置顶",
+	"act.up" : "上移",
+	"act.down" : "下移"
 }
 
 const enTable : UTSJSONObject = {
@@ -424,7 +428,11 @@ const enTable : UTSJSONObject = {
 	"err.platformUnsupported" : "Volcengine query is not supported on this platform yet",
 	"err.noBalance" : "No balance info in response",
 	"bal.label" : "Balance",
-	"bal.grantedIncl" : " (incl. granted "
+	"bal.grantedIncl" : " (incl. granted ",
+	"act.pin" : "Pin",
+	"act.unpin" : "Unpin",
+	"act.up" : "Up",
+	"act.down" : "Down"
 }
 
 function loadPref() : string {

@@ -453,7 +453,8 @@ function save() {
 					protocol : protocol,
 					customQuery : customQuery,
 					organizationId : organizationId.value.trim(),
-					projectId : projectId.value.trim()
+					projectId : projectId.value.trim(),
+					pinned : false
 				}
 				list[i] = updated
 				break
@@ -472,7 +473,8 @@ function save() {
 			protocol : protocol,
 			customQuery : customQuery,
 			organizationId : organizationId.value.trim(),
-			projectId : projectId.value.trim()
+			projectId : projectId.value.trim(),
+			pinned : false
 		}
 		list.push(p)
 	}

@@ -359,6 +359,10 @@ function providerFromJson(item : UTSJSONObject) : StoredProvider | null {
 		organizationId : reqStr(item, "organizationId"),
 		projectId : reqStr(item, "projectId")
 	}
+	let pinned = false
+	const pv = item.getBoolean("pinned")
+	if (pv != null) pinned = pv
+	p.pinned = pinned
 	if (p.id.length == 0) return null
 	return p
 }
@@ -375,7 +379,8 @@ function providerToJson(p : StoredProvider) : UTSJSONObject {
 		"accessKeyId" : p.accessKeyId,
 		"secretAccessKey" : p.secretAccessKey,
 		"organizationId" : p.organizationId,
-		"projectId" : p.projectId
+		"projectId" : p.projectId,
+		"pinned" : p.pinned
 	}
 	return item
 }
@@ -498,6 +503,53 @@ export function deleteProvider(id : string) {
 		if (p.id != id) rest.push(p)
 	}
 	saveProviders(rest)
+}
+
+/** 置顶 / 取消置顶：置顶时移动到数组最前，取消时放到置顶块之后 */
+export function togglePin(id : string) {
+	const list = loadProviders()
+	let idx = -1
+	for (let i = 0; i < list.length; i++) {
+		if (list[i].id == id) {
+			idx = i
+			break
+		}
+	}
+	if (idx < 0) return
+	const item = list[idx]
+	const rest : StoredProvider[] = []
+	for (let i = 0; i < list.length; i++) {
+		if (i != idx) rest.push(list[i])
+	}
+	if (!item.pinned) {
+		item.pinned = true
+		rest.unshift(item)
+	} else {
+		item.pinned = false
+		let insertAt = 0
+		while (insertAt < rest.length && rest[insertAt].pinned) insertAt++
+		rest.splice(insertAt, 0, item)
+	}
+	saveProviders(rest)
+}
+
+/** 上移(-1) / 下移(+1)：交换相邻位置；不跨越置顶块边界 */
+export function moveProvider(id : string, delta : number) {
+	const list = loadProviders()
+	let idx = -1
+	for (let i = 0; i < list.length; i++) {
+		if (list[i].id == id) {
+			idx = i
+			break
+		}
+	}
+	const j = idx + delta
+	if (idx < 0 || j < 0 || j >= list.length) return
+	if (list[idx].pinned != list[j].pinned) return
+	const tmp = list[idx]
+	list[idx] = list[j]
+	list[j] = tmp
+	saveProviders(list)
 }
 
 /** 清除全部供应商凭据（含 vault 与旧明文键） */

@@ -1,5 +1,5 @@
 <template>
-	<scroll-view class="page" direction="vertical" show-scrollbar="false">
+	<scroll-view class="page" direction="vertical" show-scrollbar="false" @scroll="closeSwipe">
 		<view class="wrap">
 			<!-- 顶栏：设置入口 -->
 			<view class="topbar">
@@ -15,9 +15,24 @@
 				<button class="empty-btn" type="primary" @click="addProvider">{{ emptyBtn() }}</button>
 			</view>
 
-			<!-- 供应商卡片 -->
-			<view v-for="(card, index) in cards" :key="card.provider.id" class="card">
-				<view class="card-head" @click="editProvider(card.provider.id)">
+			<!-- 供应商卡片（左滑露出操作列：置顶 / 上移 / 下移） -->
+			<view v-for="(card, index) in cards" :key="card.provider.id" class="swipe-cell">
+				<view class="swipe-actions">
+					<view class="act act-pin" @click="doPin(index)">
+						<text class="act-text">{{ card.provider.pinned ? unpinLabel() : pinLabel() }}</text>
+					</view>
+					<view class="act" @click="doMove(index, -1)">
+						<text class="act-text">↑</text>
+					</view>
+					<view class="act" @click="doMove(index, 1)">
+						<text class="act-text">↓</text>
+					</view>
+				</view>
+				<view class="card swipe-main" :style="swipeStyle(index)"
+					@touchstart="onTouchStart($event, index)"
+					@touchmove="onTouchMove($event, index)"
+					@touchend="onTouchEnd($event, index)">
+					<view class="card-head" @click="editProvider(card.provider.id)">
 					<view v-if="avatarIcon(card.provider.kind) != ''" class="avatar avatar-light">
 						<image class="avatar-img" :src="avatarIcon(card.provider.kind)" />
 					</view>
@@ -25,7 +40,7 @@
 						<text class="avatar-text">{{ avatarLetter(card.provider.kind, card.provider.label) }}</text>
 					</view>
 					<view class="card-title-wrap">
-						<text class="card-title">{{ card.provider.label }}</text>
+						<text class="card-title">{{ cardTitle(card) }}</text>
 						<text class="card-sub">{{ subtitle(card) }}</text>
 					</view>
 					<text class="card-edit">{{ editLabel() }}</text>
@@ -59,6 +74,7 @@
 						<image class="refresh-icon" :style="card.loading ? 'opacity:0.35;' : 'opacity:1;'" src="/static/refresh-cw.png"></image>
 					</view>
 				</view>
+				</view>
 			</view>
 
 			<view v-if="cards.length > 0" class="footer">
@@ -78,6 +94,7 @@ import { loadSettings } from '../../services/settings'
 import { kindAvatarLetter, kindAvatarColor } from '../../services/registry'
 import { tierDisplayName, formatRemaining, formatRelative, formatUsd, clampPct } from '../../utils/format'
 import { t } from '../../utils/i18n'
+import { togglePin, moveProvider } from '../../services/registry'
 
 /** 首页一张卡片的完整渲染状态（避免模板里做可选链，展示字段全部展开） */
 type CardState = {
@@ -88,6 +105,7 @@ type CardState = {
 	tiers : QuotaTier[]
 	balanceText : string
 	queriedAt : number
+	offset : number   // 左滑位移（px），负值 = 已左移
 }
 
 const cards = ref<CardState[]>([])
@@ -154,6 +172,124 @@ function editLabel() : string {
 function addBtnText() : string {
 	return "＋ " + t("home.empty.btn")
 }
+function pinLabel() : string {
+	return t("act.pin")
+}
+function unpinLabel() : string {
+	return t("act.unpin")
+}
+function cardTitle(card : CardState) : string {
+	return card.provider.pinned ? card.provider.label + " 📌" : card.provider.label
+}
+
+// ── 左滑操作（swipe-cell）──
+// 卡片跟手左移露出右侧操作列（置顶 / 上移 / 下移）。
+// 方向锁：横向位移超过阈值才进入拖拽，纵向让位给页面滚动。
+const ACT_W = 168.0 // 操作列总宽 px = 3 × 56
+let dragIndex = -1
+let startX = 0.0
+let startY = 0.0
+let dx = 0.0
+let horizontal = false
+let suppressClick = false
+let openIndexId = -1
+
+function swipeStyle(index : number) : string {
+	const card = cards.value[index]
+	if (card == null) return ""
+	return "transform: translateX(" + card.offset + "px);"
+}
+
+function onTouchStart(e : TouchEvent, index : number) {
+	const ts = e.touches
+	if (ts.length == 0) return
+	const t0 = ts[0]
+	const x = t0.clientX
+	const y = t0.clientY
+	if (x == null || y == null) return
+	startX = x as number
+	startY = y as number
+	dx = 0
+	horizontal = false
+	dragIndex = index
+	// 打开另一张卡前先收起当前
+	if (openIndexId != -1 && openIndexId != index) {
+		if (openIndexId < cards.value.length) cards.value[openIndexId].offset = 0
+		openIndexId = -1
+	}
+}
+
+function onTouchMove(e : TouchEvent, index : number) {
+	if (dragIndex != index) return
+	const ts = e.touches
+	if (ts.length == 0) return
+	const t0 = ts[0]
+	const x = t0.clientX
+	const y = t0.clientY
+	if (x == null || y == null) return
+	const ddx = (x as number) - startX
+	const ddy = (y as number) - startY
+	if (!horizontal) {
+		if (Math.abs(ddx) > 15 && Math.abs(ddx) > Math.abs(ddy)) {
+			horizontal = true
+		} else if (Math.abs(ddy) > 15) {
+			return // 纵向手势：交给页面滚动
+		} else {
+			return
+		}
+	}
+	const card = cards.value[index]
+	const base = openIndexId == index ? -ACT_W : 0
+	let target = base + ddx
+	if (target > 0) target = 0
+	if (target < -ACT_W) target = -ACT_W
+	card.offset = target
+	dx = target - base
+}
+
+function onTouchEnd(_e : TouchEvent, index : number) {
+	if (dragIndex != index) {
+		dragIndex = -1
+		return
+	}
+	dragIndex = -1
+	if (!horizontal) return
+	// 拖拽后的 click 需要吞掉，避免误触进入编辑页
+	suppressClick = true
+	const card = cards.value[index]
+	const base = openIndexId == index ? -ACT_W : 0
+	if (base + dx < -ACT_W / 2) {
+		openIndexId = index
+		card.offset = -ACT_W
+	} else {
+		openIndexId = -1
+		card.offset = 0
+	}
+}
+
+function closeSwipe() {
+	if (openIndexId == -1) return
+	if (openIndexId >= 0 && openIndexId < cards.value.length) {
+		cards.value[openIndexId].offset = 0
+	}
+	openIndexId = -1
+}
+
+function doPin(index : number) {
+	const card = cards.value[index]
+	card.offset = 0
+	openIndexId = -1
+	togglePin(card.provider.id)
+	buildCards()
+}
+
+function doMove(index : number, delta : number) {
+	const card = cards.value[index]
+	card.offset = 0
+	openIndexId = -1
+	moveProvider(card.provider.id, delta)
+	buildCards()
+}
 
 function buildCards() {
 	const list = loadProviders()
@@ -166,7 +302,8 @@ function buildCards() {
 			planMsg : "",
 			tiers : [],
 			balanceText : "",
-			queriedAt : 0
+			queriedAt : 0,
+			offset : 0
 		}
 			// 回填上次查询缓存：打开即有数据，离线也能看最后状态
 			const last = loadLastQuota(p.id)
@@ -249,6 +386,11 @@ function addProvider() {
 }
 
 function editProvider(id : string) {
+	// 左滑拖拽结束后紧接的 click 属于误触，吞掉一次
+	if (suppressClick) {
+		suppressClick = false
+		return
+	}
 	uni.navigateTo({ url : "/pages/provider/edit?id=" + id })
 }
 
@@ -362,11 +504,39 @@ onPullDownRefresh(() => {
 }
 
 /* 卡片 */
+.swipe-cell {
+	position : relative;
+	margin-bottom : 24rpx;
+}
+.swipe-actions {
+	position : absolute;
+	right : 0;
+	top : 0;
+	bottom : 0;
+	flex-direction : row;
+	align-items : stretch;
+}
+.act {
+	width : 56px;
+	justify-content : center;
+	align-items : center;
+	background-color : #4338ca;
+}
+.act-pin {
+	background-color : #f59e0b;
+}
+.act-text {
+	color : #ffffff;
+	font-size : 26rpx;
+	font-weight : bold;
+}
+.swipe-main {
+	transform : translateX(0px);
+}
 .card {
 	background-color : #ffffff;
 	border-radius : 24rpx;
 	padding : 28rpx;
-	margin-bottom : 24rpx;
 }
 .card-head {
 	flex-direction : row;

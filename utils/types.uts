@@ -35,4 +35,5 @@ export type StoredProvider = {
 	secretAccessKey : string // 仅 volcengine：私密访问密钥
 	organizationId : string // 仅 zhipu_team 协议
 	projectId : string      // 仅 zhipu_team 协议
+	pinned : boolean        // 置顶（显示时排在最前；旧数据读取缺省 false）
 }
