@@ -74,7 +74,7 @@ import { clearLastQuota } from '../../services/lastquota'
 import { vaultAvailable } from '../../utils/vault'
 import { t, getLangPref, setLangPref, LANG_AUTO, LANG_ZH, LANG_EN, LANG_DE, LANG_FR, LANG_JA, LANG_KO, LANG_RU } from '../../utils/i18n'
 
-const appVersion = "0.4.0"
+const appVersion = "0.5.0"
 
 const INTERVALS : number[] = [0, 5, 15, 30, 60]
 const intervalLabels : string[] = [t("set.interval.off"), t("set.interval.5"), t("set.interval.15"), t("set.interval.30"), t("set.interval.60")]

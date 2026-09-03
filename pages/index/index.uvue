@@ -19,7 +19,7 @@
 			<view v-for="(card, index) in cards" :key="card.provider.id" class="swipe-cell">
 				<view class="swipe-actions">
 					<view class="act act-pin" @click="doPin(index)">
-						<text class="act-text">{{ card.provider.pinned ? unpinLabel() : pinLabel() }}</text>
+						<text class="act-text">📌</text>
 					</view>
 					<view class="act" @click="doMove(index, -1)">
 						<text class="act-text">↑</text>
@@ -40,7 +40,12 @@
 						<text class="avatar-text">{{ avatarLetter(card.provider.kind, card.provider.label) }}</text>
 					</view>
 					<view class="card-title-wrap">
-						<text class="card-title">{{ cardTitle(card) }}</text>
+						<view class="title-row">
+							<text class="card-title">{{ card.provider.label }}</text>
+							<view v-if="card.provider.pinned" class="pin-tag">
+								<text class="pin-tag-text">{{ pinTagText() }}</text>
+							</view>
+						</view>
 						<text class="card-sub">{{ subtitle(card) }}</text>
 					</view>
 					<text class="card-edit">{{ editLabel() }}</text>
@@ -172,20 +177,14 @@ function editLabel() : string {
 function addBtnText() : string {
 	return "＋ " + t("home.empty.btn")
 }
-function pinLabel() : string {
-	return t("act.pin")
-}
-function unpinLabel() : string {
-	return t("act.unpin")
-}
-function cardTitle(card : CardState) : string {
-	return card.provider.pinned ? card.provider.label + " 📌" : card.provider.label
+function pinTagText() : string {
+	return t("tag.pinned")
 }
 
 // ── 左滑操作（swipe-cell）──
 // 卡片跟手左移露出右侧操作列（置顶 / 上移 / 下移）。
 // 方向锁：横向位移超过阈值才进入拖拽，纵向让位给页面滚动。
-const ACT_W = 168.0 // 操作列总宽 px = 3 × 56
+const ACT_W = 210.0 // 操作列总宽 px = 3 × 60（按钮） + 3 × 10（间距）
 let dragIndex = -1
 let startX = 0.0
 let startY = 0.0
@@ -200,8 +199,9 @@ function swipeStyle(index : number) : string {
 	return "transform: translateX(" + card.offset + "px);"
 }
 
-function onTouchStart(e : TouchEvent, index : number) {
-	const ts = e.touches
+function onTouchStart(e : any, index : number) {
+	const te = e as UniTouchEvent
+	const ts = te.touches
 	if (ts.length == 0) return
 	const t0 = ts[0]
 	const x = t0.clientX
@@ -219,9 +219,10 @@ function onTouchStart(e : TouchEvent, index : number) {
 	}
 }
 
-function onTouchMove(e : TouchEvent, index : number) {
+function onTouchMove(e : any, index : number) {
 	if (dragIndex != index) return
-	const ts = e.touches
+	const te = e as UniTouchEvent
+	const ts = te.touches
 	if (ts.length == 0) return
 	const t0 = ts[0]
 	const x = t0.clientX
@@ -247,7 +248,7 @@ function onTouchMove(e : TouchEvent, index : number) {
 	dx = target - base
 }
 
-function onTouchEnd(_e : TouchEvent, index : number) {
+function onTouchEnd(_e : any, index : number) {
 	if (dragIndex != index) {
 		dragIndex = -1
 		return
@@ -275,21 +276,6 @@ function closeSwipe() {
 	openIndexId = -1
 }
 
-function doPin(index : number) {
-	const card = cards.value[index]
-	card.offset = 0
-	openIndexId = -1
-	togglePin(card.provider.id)
-	buildCards()
-}
-
-function doMove(index : number, delta : number) {
-	const card = cards.value[index]
-	card.offset = 0
-	openIndexId = -1
-	moveProvider(card.provider.id, delta)
-	buildCards()
-}
 
 function buildCards() {
 	const list = loadProviders()
@@ -359,6 +345,22 @@ function refreshAll() {
 	for (let i = 0; i < cards.value.length; i++) {
 		refreshOne(i)
 	}
+}
+
+function doPin(index : number) {
+	const card = cards.value[index]
+	card.offset = 0
+	openIndexId = -1
+	togglePin(card.provider.id)
+	buildCards()
+}
+
+function doMove(index : number, delta : number) {
+	const card = cards.value[index]
+	card.offset = 0
+	openIndexId = -1
+	moveProvider(card.provider.id, delta)
+	buildCards()
 }
 
 function subtitle(card : CardState) : string {
@@ -514,10 +516,15 @@ onPullDownRefresh(() => {
 	top : 0;
 	bottom : 0;
 	flex-direction : row;
-	align-items : stretch;
+	justify-content : flex-end;
+	align-items : center;
+	padding-right : 12rpx;
 }
 .act {
-	width : 56px;
+	width : 60px;
+	height : 120rpx;
+	margin-left : 10rpx;
+	border-radius : 16rpx;
 	justify-content : center;
 	align-items : center;
 	background-color : #4338ca;
@@ -527,7 +534,7 @@ onPullDownRefresh(() => {
 }
 .act-text {
 	color : #ffffff;
-	font-size : 26rpx;
+	font-size : 34rpx;
 	font-weight : bold;
 }
 .swipe-main {
@@ -566,6 +573,21 @@ onPullDownRefresh(() => {
 	flex-direction : column;
 	flex : 1;
 	margin-right : 12rpx;
+}
+.title-row {
+	flex-direction : row;
+	align-items : center;
+}
+.pin-tag {
+	background-color : #fef3c7;
+	border-radius : 8rpx;
+	padding : 2rpx 12rpx;
+	margin-left : 10rpx;
+}
+.pin-tag-text {
+	font-size : 20rpx;
+	color : #92400e;
+	font-weight : bold;
 }
 .card-title {
 	font-size : 34rpx;

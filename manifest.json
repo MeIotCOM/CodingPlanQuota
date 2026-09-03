@@ -2,8 +2,8 @@
   "name": "CodingPlanQuota",
   "appid": "__UNI__A79BD59",
   "description": "随时随地查看智谱 GLM、Kimi、MiniMax、ZenMux、OpenCode Go、火山方舟、DeepSeek 等 AI 编程套餐的 5 小时 / 周 / 月额度消耗与重置倒计时。支持自定义中转站协议、8 种界面语言、离线缓存与配置备份。纯本地运行，无后端、不上传任何数据。",
-  "versionName": "0.4.0",
-  "versionCode": 4,
+  "versionName": "0.5.0",
+  "versionCode": 5,
   "locale": "zh-Hans",
   "uni-app-x": {
     "styleIsolationVersion": "2"

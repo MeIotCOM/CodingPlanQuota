@@ -231,7 +231,8 @@ const zhTable : UTSJSONObject = {
 	"act.pin" : "置顶",
 	"act.unpin" : "取消置顶",
 	"act.up" : "上移",
-	"act.down" : "下移"
+	"act.down" : "下移",
+	"tag.pinned" : "置顶"
 }
 
 const enTable : UTSJSONObject = {
@@ -432,7 +433,8 @@ const enTable : UTSJSONObject = {
 	"act.pin" : "Pin",
 	"act.unpin" : "Unpin",
 	"act.up" : "Up",
-	"act.down" : "Down"
+	"act.down" : "Down",
+	"tag.pinned" : "Pinned"
 }
 
 function loadPref() : string {
